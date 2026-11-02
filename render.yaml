@@ -1,0 +1,27 @@
+# Render Blueprint: the hosted backend. Render reads this file from the repo
+# (Dashboard → New → Blueprint → pick this repo) and keeps the service in sync with it.
+# Secrets are not stored here; Render asks for the `sync: false` values on first setup.
+services:
+  - type: web
+    name: mfp-backend
+    runtime: node
+    plan: free
+    # Same region as the Supabase project (ap-southeast-1).
+    region: singapore
+    branch: main
+    # Migrations run during the build (the free plan has no pre-deploy step).
+    buildCommand: npm ci && npx prisma migrate deploy && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      # From C:\Users\samadishet\.mfp-secrets\supabase.env (transaction pooler, port 6543).
+      - key: DATABASE_URL
+        sync: false
+      # From the same file (session pooler, port 5432); used by `prisma migrate deploy`.
+      - key: DIRECT_URL
+        sync: false
+      # Comma-separated: the Vercel site URL and the Android app origin (https://localhost).
+      - key: CORS_ORIGINS
+        sync: false
