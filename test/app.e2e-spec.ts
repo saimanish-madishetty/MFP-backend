@@ -21,7 +21,7 @@ describe('Health (e2e)', () => {
     return request(app.getHttpServer())
       .get('/health')
       .expect(200)
-      .expect({ status: 'ok', db: 'up' });
+      .expect({ status: 'ok', db: 'up', commit: null });
   });
 
   afterEach(async () => {
