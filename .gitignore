@@ -18,3 +18,6 @@
 *.log
 .DS_Store
 Thumbs.db
+
+# Editor settings (kept on this machine, not in Git)
+.vscode/
