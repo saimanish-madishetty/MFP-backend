@@ -105,6 +105,12 @@ export class StockController {
     return this.production.forDate(date ?? formatDate(todayIST()));
   }
 
+  /** Wastage history of one product: raw materials used vs. the recipe, per production day. */
+  @Get('production/wastage')
+  wastage(@Query('productId', ParseIntPipe) productId: number) {
+    return this.production.wastage(productId);
+  }
+
   @Get('production/recent')
   recent() {
     return this.production.recent();

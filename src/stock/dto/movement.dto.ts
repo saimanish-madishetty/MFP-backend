@@ -77,7 +77,10 @@ export class SaveProductionDto {
   @MaxLength(1000)
   notes?: string;
 
-  /** Materials used that day. Empty `items` and `products` removes the day's entry. */
+  /**
+   * Materials used that day that aren't for a particular product (e.g. supplies).
+   * Empty `items` and `products` removes the day's entry.
+   */
   @IsArray()
   @ArrayUnique((i: ProductionItemDto) => i.materialId, {
     message: 'Each material can appear only once',
@@ -101,7 +104,18 @@ export class ProductionOutputDto {
   @IsInt()
   productId: number;
 
+  /** In the product's sale unit (packs, bags, …). */
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
   quantity: number;
+
+  /** Raw materials actually used for this product; compared with the recipe to work out wastage. */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique((i: ProductionItemDto) => i.materialId, {
+    message: 'Each material can appear only once per product',
+  })
+  @ValidateNested({ each: true })
+  @Type(() => ProductionItemDto)
+  materials?: ProductionItemDto[];
 }

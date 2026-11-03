@@ -44,6 +44,8 @@ export async function applyMovement(
     supplier?: string;
     note?: string;
     productionEntryId?: number;
+    productId?: number;
+    expectedQty?: Prisma.Decimal | null;
   },
 ) {
   const movement = await tx.stockMovement.create({ data });

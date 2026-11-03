@@ -214,12 +214,18 @@ model StockMovement {
   supplier          String?
   note              String?
   productionEntryId Int?
+  /// USAGE only: the product this material was used for (null = general use, e.g. supplies for the day)
+  productId         Int?
+  /// USAGE for a product: what the recipe says it should have taken (snapshot), for wastage = used − expected
+  expectedQty       Decimal?          @db.Decimal(12, 3)
   createdAt         DateTime          @default(now())
 
   material        Material         @relation(fields: [materialId], references: [id])
   productionEntry ProductionEntry? @relation(fields: [productionEntryId], references: [id], onDelete: Cascade)
+  product         Product?         @relation(fields: [productId], references: [id])
 
   @@index([materialId, date])
+  @@index([productId, date])
 }
 
 /// Day-end entry: materials used (and, from module 3, products made)
@@ -278,9 +284,10 @@ model Product {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  materials ProductMaterial[]
-  movements ProductStockMovement[]
-  saleLines SaleLine[]
+  materials     ProductMaterial[]
+  movements     ProductStockMovement[]
+  saleLines     SaleLine[]
+  materialUsage StockMovement[]
 }
 
 /// Recipe / bill of materials: how much of a material one sale unit uses
