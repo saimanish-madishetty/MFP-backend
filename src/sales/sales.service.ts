@@ -400,7 +400,7 @@ export class SalesService {
         date,
         dueDate: addDays(date, creditDays),
         buyerId: buyer.id,
-        buyerName: buyer.name,
+        buyerName: buyer.invoiceName ?? buyer.name,
         buyerAddress: address || null,
         buyerPhone: buyer.phone,
         buyerGstin: buyer.gstin,

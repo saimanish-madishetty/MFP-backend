@@ -28,6 +28,9 @@ export class CreateBuyerDto {
   @MaxLength(150)
   name: string;
 
+  /** Name printed on invoices; blank = same as name */
+  @IsOptional() @IsString() @MaxLength(150) invoiceName?: string | null;
+
   @IsOptional() @IsString() @MaxLength(100) contactPerson?: string | null;
   @IsOptional() @IsString() @MaxLength(20) phone?: string | null;
   @IsOptional() @IsString() @MaxLength(20) altPhone?: string | null;

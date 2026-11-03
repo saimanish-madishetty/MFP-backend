@@ -332,6 +332,8 @@ model ProductStockMovement {
 model Buyer {
   id             Int      @id @default(autoincrement())
   name           String
+  /// Name printed on invoices (registered business name); null = same as name
+  invoiceName    String?
   contactPerson  String?
   phone          String?
   altPhone       String?
