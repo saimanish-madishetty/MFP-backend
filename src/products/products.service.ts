@@ -17,6 +17,15 @@ import {
   applyProductMovement,
   reverseProductMovement,
 } from './product-stock.js';
+import {
+  packagingInfo,
+  pricePerSaleUnit,
+  sellUnits,
+  stockUnit,
+  toStock,
+  unitsLabel,
+  type Packaging,
+} from './packaging.js';
 
 const Decimal = Prisma.Decimal;
 
@@ -46,20 +55,30 @@ type ProductWithMaterials = Prisma.ProductGetPayload<{
 function costEstimate(p: ProductWithMaterials) {
   let total = new Decimal(0);
   let missing = 0;
+  const pieces = p.piecesPerUnit ?? 1;
   for (const line of p.materials) {
     if (line.qtyPerUnit === null || line.material.lastCostPerUnit === null) {
       missing += 1;
       continue;
     }
-    total = total.add(line.qtyPerUnit.mul(line.material.lastCostPerUnit));
+    const perUnit = line.perPiece
+      ? line.qtyPerUnit.mul(pieces)
+      : line.qtyPerUnit;
+    total = total.add(perUnit.mul(line.material.lastCostPerUnit));
   }
   const cost = p.materials.length > 0 ? total.toDecimalPlaces(2) : null;
+  const price = pricePerSaleUnit(p, p.price).toDecimalPlaces(2);
   return {
     costPerUnit: cost?.toFixed(2) ?? null,
     incomplete: missing > 0,
-    margin:
-      cost !== null && p.price.gt(0) ? p.price.sub(cost).toFixed(2) : null,
+    pricePerUnit: price.toFixed(2),
+    margin: cost !== null && price.gt(0) ? price.sub(cost).toFixed(2) : null,
   };
+}
+
+/** Product as returned by the API: adds the cost estimate and packaging (units, conversions). */
+function present(p: ProductWithMaterials) {
+  return { ...p, cost: costEstimate(p), pack: packagingInfo(p) };
 }
 
 @Injectable()
@@ -72,7 +91,7 @@ export class ProductsService {
       orderBy: [{ active: 'desc' }, { internalName: 'asc' }],
       include: materialsInclude,
     });
-    return products.map((p) => ({ ...p, cost: costEstimate(p) }));
+    return products.map(present);
   }
 
   async get(id: number) {
@@ -97,12 +116,13 @@ export class ProductsService {
       balance = balance.sub(m.quantity);
       return row;
     });
-    return { ...product, cost: costEstimate(product), movements: history };
+    return { ...present(product), movements: history };
   }
 
   async create(dto: CreateProductDto) {
     await this.assertUnique(dto);
     await this.assertMaterials(dto.materials);
+    const packaging = this.assertPackaging(this.packagingOf(dto));
     const openingDate = dto.openingDate
       ? parseDate(dto.openingDate)
       : todayIST();
@@ -114,10 +134,7 @@ export class ProductsService {
         data: {
           ...this.fields(dto),
           materials: dto.materials && {
-            create: dto.materials.map((m) => ({
-              materialId: m.materialId,
-              qtyPerUnit: m.qtyPerUnit ?? null,
-            })),
+            create: this.recipe(dto.materials, packaging),
           },
         },
       });
@@ -126,7 +143,7 @@ export class ProductsService {
           productId: created.id,
           date: openingDate,
           type: ProductMovementType.OPENING,
-          quantity: dto.openingQty,
+          quantity: toStock(packaging, dto.openingQty, packaging.saleUnit),
           note: 'Opening stock',
         });
       }
@@ -136,9 +153,22 @@ export class ProductsService {
   }
 
   async update(id: number, dto: UpdateProductDto) {
-    await this.findOrThrow(id);
+    const current = await this.findOrThrow(id);
     await this.assertUnique(dto, id);
     await this.assertMaterials(dto.materials);
+    const packaging = this.assertPackaging({
+      ...this.packagingOf(current),
+      ...this.packagingOf(dto),
+    });
+    if (stockUnit(packaging) !== stockUnit(current)) {
+      const used = await this.prisma.productStockMovement.count({
+        where: { productId: id },
+      });
+      if (used > 0)
+        throw new BadRequestException(
+          "Stock is already recorded for this product, so it can't switch between pieces, weight and whole units. Add a new product for the new packing.",
+        );
+    }
     await this.prisma.$transaction(async (tx) => {
       await tx.product.update({
         where: { id },
@@ -147,10 +177,9 @@ export class ProductsService {
       if (dto.materials) {
         await tx.productMaterial.deleteMany({ where: { productId: id } });
         await tx.productMaterial.createMany({
-          data: dto.materials.map((m) => ({
+          data: this.recipe(dto.materials, packaging).map((m) => ({
             productId: id,
-            materialId: m.materialId,
-            qtyPerUnit: m.qtyPerUnit ?? null,
+            ...m,
           })),
         });
       }
@@ -166,10 +195,15 @@ export class ProductsService {
     if (dto.quantity === undefined && dto.countedQty === undefined) {
       throw new BadRequestException('Give a quantity or a counted quantity');
     }
+    const unit = dto.unit ?? product.saleUnit;
+    if (!sellUnits(product).includes(unit))
+      throw new BadRequestException(
+        `This product is counted in ${unitsLabel(sellUnits(product))}`,
+      );
     const quantity =
       dto.countedQty !== undefined
-        ? new Decimal(dto.countedQty).sub(product.currentQty)
-        : new Decimal(dto.quantity ?? 0);
+        ? toStock(product, dto.countedQty, unit).sub(product.currentQty)
+        : toStock(product, dto.quantity ?? 0, unit);
     if (quantity.isZero())
       throw new BadRequestException(
         'Nothing to adjust: the quantity is unchanged',
@@ -213,12 +247,15 @@ export class ProductsService {
         internalName: true,
         currentQty: true,
         saleUnit: true,
+        piecesPerUnit: true,
+        packSize: true,
+        packUnit: true,
       },
     });
     return {
       products: products.length,
       outOfStock: products.filter((p) => p.currentQty.lte(0)).length,
-      stock: products,
+      stock: products.map((p) => ({ ...p, pack: packagingInfo(p) })),
     };
   }
 
@@ -233,9 +270,11 @@ export class ProductsService {
       internalName: dto.internalName?.trim(),
       publicName: dto.publicName?.trim(),
       code: dto.code === undefined ? undefined : dto.code?.trim() || null,
+      piecesPerUnit: dto.piecesPerUnit,
       packSize: dto.packSize,
       packUnit: dto.packUnit,
       saleUnit: dto.saleUnit,
+      priceUnit: dto.priceUnit,
       price: dto.price,
       mrp: dto.mrp,
       hsnCode:
@@ -248,6 +287,58 @@ export class ProductsService {
               .filter((s) => s.key.trim())
               .map((s) => ({ key: s.key.trim(), value: s.value.trim() })),
     } as Prisma.ProductUncheckedCreateInput;
+  }
+
+  /** The packaging fields present in `src` (missing ones are left out, so updates can merge). */
+  private packagingOf(src: {
+    saleUnit?: Packaging['saleUnit'];
+    piecesPerUnit?: number | null;
+    packSize?: Prisma.Decimal | number | null;
+    packUnit?: Packaging['packUnit'];
+    priceUnit?: Packaging['priceUnit'];
+  }) {
+    const keys = [
+      'saleUnit',
+      'piecesPerUnit',
+      'packSize',
+      'packUnit',
+      'priceUnit',
+    ] as const;
+    return Object.fromEntries(
+      keys.filter((k) => src[k] !== undefined).map((k) => [k, src[k]]),
+    ) as Partial<typeof src>;
+  }
+
+  private assertPackaging(p: ReturnType<ProductsService['packagingOf']>) {
+    const packaging: Packaging = {
+      saleUnit: p.saleUnit ?? 'PACK',
+      piecesPerUnit: p.piecesPerUnit ?? null,
+      packSize: p.packSize == null ? null : new Decimal(p.packSize),
+      packUnit: p.packUnit ?? null,
+      priceUnit: p.priceUnit ?? null,
+    };
+    if ((packaging.packSize === null) !== (packaging.packUnit === null))
+      throw new BadRequestException('Give both the size and its unit');
+    if (packaging.piecesPerUnit && packaging.saleUnit === 'PCS')
+      throw new BadRequestException(
+        "A product sold as pieces can't have pieces inside; choose pack, box or bag",
+      );
+    const units = sellUnits(packaging);
+    if (packaging.priceUnit && !units.includes(packaging.priceUnit))
+      throw new BadRequestException(
+        `The price can be per ${unitsLabel(units, 'or per')}`,
+      );
+    return packaging;
+  }
+
+  /** Recipe rows; "per piece" only applies to products with pieces. */
+  private recipe(materials: ProductMaterialDto[], packaging: Packaging) {
+    const pieces = (packaging.piecesPerUnit ?? 0) > 1;
+    return materials.map((m) => ({
+      materialId: m.materialId,
+      qtyPerUnit: m.qtyPerUnit ?? null,
+      perPiece: pieces && (m.perPiece ?? false),
+    }));
   }
 
   private async assertUnique(

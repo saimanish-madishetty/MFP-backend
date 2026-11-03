@@ -13,7 +13,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { PaymentMode } from '../../generated/prisma/enums.js';
+import { PaymentMode, Unit } from '../../generated/prisma/enums.js';
 import { IsDateOnly } from '../../common/is-date-only.js';
 
 export class SaleLineDto {
@@ -23,6 +23,11 @@ export class SaleLineDto {
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
   quantity: number;
+
+  /** Unit of quantity and rate: the product's sale unit (default) or its stock unit (piece, kg). */
+  @IsOptional()
+  @IsEnum(Unit)
+  unit?: Unit;
 
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)

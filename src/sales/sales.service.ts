@@ -21,6 +21,12 @@ import {
   applyProductMovement,
   reverseProductMovement,
 } from '../products/product-stock.js';
+import {
+  packDescription,
+  sellUnits,
+  toStock,
+  unitsLabel,
+} from '../products/packaging.js';
 import { SettingsService } from '../settings/settings.js';
 import { CancelSaleDto, MarkPaidDto, SaveSaleDto } from './dto/sale.dto.js';
 import {
@@ -251,7 +257,7 @@ export class SalesService {
           productId: line.productId,
           date: todayIST(),
           type: ProductMovementType.SALE_CANCELLED,
-          quantity: line.quantity,
+          quantity: line.stockQty,
           saleId: id,
           note: `${sale.invoiceNumber} cancelled`,
         });
@@ -340,6 +346,11 @@ export class SalesService {
       const product = productById.get(l.productId);
       if (!product)
         throw new BadRequestException(`Item ${i + 1}: product not found`);
+      const unit = l.unit ?? product.saleUnit;
+      if (!sellUnits(product).includes(unit))
+        throw new BadRequestException(
+          `Item ${i + 1}: ${product.publicName} is sold by ${unitsLabel(sellUnits(product))}`,
+        );
       if (
         new Decimal(l.discount ?? 0).gt(new Decimal(l.quantity).mul(l.rate))
       ) {
@@ -358,9 +369,11 @@ export class SalesService {
         lineNo: i + 1,
         productId: product.id,
         publicName: product.publicName,
+        description: packDescription(product),
         hsnCode: product.hsnCode,
         quantity: l.quantity,
-        unit: product.saleUnit,
+        unit,
+        stockQty: toStock(product, l.quantity, unit),
         rate: l.rate,
         discount: amounts.discount,
         taxableValue: amounts.taxableValue,
@@ -409,7 +422,7 @@ export class SalesService {
         productId: line.productId,
         date: prepared.date,
         type: ProductMovementType.SOLD,
-        quantity: -line.quantity,
+        quantity: line.stockQty.neg(),
         saleId,
       });
     }

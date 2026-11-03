@@ -9,6 +9,7 @@ import {
   applyProductMovement,
   reverseProductMovement,
 } from '../products/product-stock.js';
+import { toSaleUnits, toStock } from '../products/packaging.js';
 import { SaveProductionDto } from './dto/movement.dto.js';
 import { applyMovement, reverseMovement } from './stock.service.js';
 
@@ -25,7 +26,10 @@ export class ProductionService {
       where: { date: parseDate(dateStr) },
       include: {
         materialMovements: { where: { type: StockMovementType.USAGE } },
-        productMovements: { where: { type: ProductMovementType.PRODUCED } },
+        productMovements: {
+          where: { type: ProductMovementType.PRODUCED },
+          include: { product: true },
+        },
       },
     });
     return {
@@ -39,9 +43,10 @@ export class ProductionService {
           materialId: m.materialId,
           quantity: m.quantity.neg().toString(),
         })),
+        // Products made are entered in sale units (packs, bags); stock is kept in stock units.
         products: entry.productMovements.map((m) => ({
           productId: m.productId,
-          quantity: m.quantity.toString(),
+          quantity: toSaleUnits(m.product, m.quantity).toString(),
         })),
       },
     };
@@ -78,13 +83,15 @@ export class ProductionService {
       if (found !== dto.items.length)
         throw new BadRequestException('Unknown material in the list');
     }
-    if (products.length > 0) {
-      const found = await this.prisma.product.count({
-        where: { id: { in: products.map((p) => p.productId) } },
-      });
-      if (found !== products.length)
-        throw new BadRequestException('Unknown product in the list');
-    }
+    const productById = new Map(
+      (
+        await this.prisma.product.findMany({
+          where: { id: { in: products.map((p) => p.productId) } },
+        })
+      ).map((p) => [p.id, p]),
+    );
+    if (productById.size !== products.length)
+      throw new BadRequestException('Unknown product in the list');
 
     await this.prisma.$transaction(async (tx) => {
       const existing = await tx.productionEntry.findUnique({
@@ -118,11 +125,12 @@ export class ProductionService {
         });
       }
       for (const p of products) {
+        const product = productById.get(p.productId)!;
         await applyProductMovement(tx, {
           productId: p.productId,
           date,
           type: ProductMovementType.PRODUCED,
-          quantity: p.quantity,
+          quantity: toStock(product, p.quantity, product.saleUnit),
           productionEntryId: entry.id,
         });
       }

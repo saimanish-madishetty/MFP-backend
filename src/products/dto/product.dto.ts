@@ -34,11 +34,15 @@ export class ProductMaterialDto {
   @IsInt()
   materialId: number;
 
-  /** Per sold unit; may be left blank until known. */
+  /** Per sold unit (or per piece when `perPiece`); may be left blank until known. */
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 6 })
   @IsPositive()
   qtyPerUnit?: number | null;
+
+  @IsOptional()
+  @IsBoolean()
+  perPiece?: boolean;
 }
 
 export class CreateProductDto {
@@ -59,6 +63,14 @@ export class CreateProductDto {
   @MaxLength(30)
   code?: string | null;
 
+  /** Pieces inside one unit sold (e.g. 10); blank for single packaging. */
+  @IsOptional()
+  @IsInt()
+  @Min(2)
+  @Max(10000)
+  piecesPerUnit?: number | null;
+
+  /** Size of each piece, or of the whole unit when there are no pieces. */
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
@@ -70,6 +82,11 @@ export class CreateProductDto {
 
   @IsEnum(Unit)
   saleUnit: Unit;
+
+  /** What `price` is for: the sale unit (default), a piece or a kg/L. */
+  @IsOptional()
+  @IsEnum(Unit)
+  priceUnit?: Unit | null;
 
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
@@ -106,7 +123,7 @@ export class CreateProductDto {
   @Type(() => ProductMaterialDto)
   materials?: ProductMaterialDto[];
 
-  /** Finished stock on hand when the product is added. */
+  /** Finished stock on hand when the product is added, in sale units (packs, bags, …). */
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
@@ -137,6 +154,11 @@ export class ProductAdjustmentDto {
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
   countedQty?: number;
+
+  /** Unit of `quantity`/`countedQty`: the sale unit (default) or the stock unit (pieces, kg). */
+  @IsOptional()
+  @IsEnum(Unit)
+  unit?: Unit;
 
   @IsString()
   @IsNotEmpty()
