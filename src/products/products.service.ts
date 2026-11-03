@@ -267,6 +267,37 @@ export class ProductsService {
     };
   }
 
+  /**
+   * Permanently deletes a product: its stock history and recipe. Raw materials used for it stay in
+   * material stock (they were really used) but are no longer linked to it. Products on an invoice
+   * can't be deleted, so invoices stay complete; archive those instead.
+   */
+  async remove(id: number) {
+    await this.findOrThrow(id);
+    const invoices = await this.prisma.sale.count({
+      where: { lines: { some: { productId: id } } },
+    });
+    if (invoices > 0)
+      throw new BadRequestException(
+        `This product is on ${invoices} invoice${invoices === 1 ? '' : 's'}, so it can't be deleted. Archive it instead.`,
+      );
+    await this.prisma.$transaction([
+      this.prisma.stockMovement.updateMany({
+        where: { productId: id },
+        data: { productId: null, expectedQty: null },
+      }),
+      this.prisma.productStockMovement.deleteMany({ where: { productId: id } }),
+      this.prisma.productMaterial.deleteMany({ where: { productId: id } }),
+      this.prisma.product.delete({ where: { id } }),
+      this.prisma.productionEntry.deleteMany({
+        where: {
+          materialMovements: { none: {} },
+          productMovements: { none: {} },
+        },
+      }),
+    ]);
+  }
+
   async findOrThrow(id: number) {
     const product = await this.prisma.product.findUnique({ where: { id } });
     if (!product) throw new NotFoundException('Product not found');

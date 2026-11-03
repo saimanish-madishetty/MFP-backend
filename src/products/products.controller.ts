@@ -46,6 +46,13 @@ export class ProductsController {
     return this.products.update(id, dto);
   }
 
+  /** Permanently deletes a product that is on no invoice. */
+  @Delete(':id')
+  @HttpCode(204)
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.products.remove(id);
+  }
+
   @Post(':id/adjustments')
   adjust(
     @Param('id', ParseIntPipe) id: number,

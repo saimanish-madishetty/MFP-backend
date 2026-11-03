@@ -284,6 +284,25 @@ export class StockService {
     return rows.map((r) => r.supplier);
   }
 
+  /**
+   * Permanently deletes a material: its purchases, usage, adjustments and opening stock, and its lines
+   * in product recipes. Production days left with nothing in them are removed too.
+   */
+  async remove(id: number) {
+    await this.findOrThrow(id);
+    await this.prisma.$transaction([
+      this.prisma.stockMovement.deleteMany({ where: { materialId: id } }),
+      this.prisma.productMaterial.deleteMany({ where: { materialId: id } }),
+      this.prisma.material.delete({ where: { id } }),
+      this.prisma.productionEntry.deleteMany({
+        where: {
+          materialMovements: { none: {} },
+          productMovements: { none: {} },
+        },
+      }),
+    ]);
+  }
+
   async findOrThrow(id: number) {
     const material = await this.prisma.material.findUnique({ where: { id } });
     if (!material) throw new NotFoundException('Material not found');

@@ -60,6 +60,13 @@ export class MaterialsController {
     return this.stock.update(id, dto);
   }
 
+  /** Permanently deletes a material with its whole stock history. */
+  @Delete(':id')
+  @HttpCode(204)
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.stock.remove(id);
+  }
+
   @Post(':id/purchases')
   addPurchase(
     @Param('id', ParseIntPipe) id: number,
