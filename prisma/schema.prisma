@@ -260,9 +260,11 @@ model Product {
   /// Size of each piece, or of the whole unit when there are no pieces (e.g. 500 G, 25 KG)
   packSize     Decimal? @db.Decimal(10, 3)
   packUnit     Unit?
-  /// Unit the price is for: the sale unit, a piece (PCS) or KG/L. Null = the sale unit.
-  priceUnit    Unit?
-  price        Decimal  @db.Decimal(12, 2)
+  /// Price per unit sold (pack, bag, …). Null = worked out from piecePrice.
+  price        Decimal? @db.Decimal(12, 2)
+  /// Price per piece, or per kg/L, when sold loose (the stock unit). Null = worked out from price.
+  /// At least one of price / piecePrice is set.
+  piecePrice   Decimal? @db.Decimal(12, 2)
   mrp          Decimal? @db.Decimal(12, 2)
   hsnCode      String?
   /// Percent, e.g. 5.00; null = no GST

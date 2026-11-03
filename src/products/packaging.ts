@@ -10,14 +10,16 @@ type Dec = Prisma.Decimal;
  *
  * Stock is kept in the smallest unit that can be sold, so loose pieces or kilos can be sold too:
  *   pieces (PCS) when the product has pieces, else KG/L when it has a weight/volume, else the sale unit.
- * A product can be sold in its sale unit or in its stock unit.
+ * A product can be sold in its sale unit or in its stock unit, each with its own price:
+ * `price` per unit sold and `piecePrice` per piece/kg. If only one is set, the other is worked out.
  */
 export type Packaging = {
   saleUnit: Unit;
   piecesPerUnit: number | null;
   packSize: Dec | null;
   packUnit: Unit | null;
-  priceUnit?: Unit | null;
+  price?: Dec | null;
+  piecePrice?: Dec | null;
 };
 
 const BASE: Partial<Record<Unit, { base: Unit; per: number }>> = {
@@ -80,11 +82,33 @@ export function toSaleUnits(p: Packaging, stockQty: Dec | number): Dec {
   return new Decimal(stockQty).div(unitFactor(p, p.saleUnit)!);
 }
 
-/** Price per unit sold (the product's price may be per piece or per kg). */
-export function pricePerSaleUnit(p: Packaging, price: Dec): Dec {
-  const priceUnit = p.priceUnit ?? p.saleUnit;
-  const factor = unitFactor(p, priceUnit) ?? new Decimal(1);
-  return price.mul(unitFactor(p, p.saleUnit)!).div(factor);
+/** The price set for `unit` itself (not worked out), or null. */
+function ownPrice(p: Packaging, unit: Unit): Dec | null {
+  if (unit === p.saleUnit && p.price != null) return new Decimal(p.price);
+  if (unit === stockUnit(p) && unit !== p.saleUnit && p.piecePrice != null)
+    return new Decimal(p.piecePrice);
+  return null;
+}
+
+/**
+ * Price for one `unit`: its own price if set, otherwise worked out from the other unit's price
+ * (e.g. no piece price → pack price ÷ 10). Null if the product has no price at all.
+ */
+export function unitPrice(p: Packaging, unit: Unit): Dec | null {
+  const own = ownPrice(p, unit);
+  if (own) return own;
+  const factor = unitFactor(p, unit);
+  const other = sellUnits(p).find((u) => u !== unit && ownPrice(p, u));
+  if (!factor || !other) return null;
+  return ownPrice(p, other)!
+    .div(unitFactor(p, other)!)
+    .mul(factor)
+    .toDecimalPlaces(2);
+}
+
+/** Unit a new invoice line starts in: the sale unit, unless only the piece/kg price is set. */
+export function defaultSellUnit(p: Packaging): Unit {
+  return p.price == null && p.piecePrice != null ? stockUnit(p) : p.saleUnit;
 }
 
 /** "10 × 500 g pack (5 kg)", "25 kg bag", "pack". */
@@ -107,9 +131,13 @@ export function packagingInfo(p: Packaging) {
   return {
     stockUnit: stockUnit(p),
     description: packDescription(p),
+    defaultUnit: defaultSellUnit(p),
     units: sellUnits(p).map((unit) => ({
       unit,
       factor: unitFactor(p, unit)!.toString(),
+      /** Selling price for this unit; `priceSet` false when worked out from the other unit. */
+      price: unitPrice(p, unit)?.toFixed(2) ?? null,
+      priceSet: ownPrice(p, unit) !== null,
     })),
   };
 }

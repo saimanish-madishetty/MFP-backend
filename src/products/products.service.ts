@@ -19,10 +19,10 @@ import {
 } from './product-stock.js';
 import {
   packagingInfo,
-  pricePerSaleUnit,
   sellUnits,
   stockUnit,
   toStock,
+  unitPrice,
   unitsLabel,
   type Packaging,
 } from './packaging.js';
@@ -67,12 +67,11 @@ function costEstimate(p: ProductWithMaterials) {
     total = total.add(perUnit.mul(line.material.lastCostPerUnit));
   }
   const cost = p.materials.length > 0 ? total.toDecimalPlaces(2) : null;
-  const price = pricePerSaleUnit(p, p.price).toDecimalPlaces(2);
+  const price = unitPrice(p, p.saleUnit);
   return {
     costPerUnit: cost?.toFixed(2) ?? null,
     incomplete: missing > 0,
-    pricePerUnit: price.toFixed(2),
-    margin: cost !== null && price.gt(0) ? price.sub(cost).toFixed(2) : null,
+    margin: cost !== null && price?.gt(0) ? price.sub(cost).toFixed(2) : null,
   };
 }
 
@@ -133,6 +132,8 @@ export class ProductsService {
       const created = await tx.product.create({
         data: {
           ...this.fields(dto),
+          price: packaging.price,
+          piecePrice: packaging.piecePrice,
           materials: dto.materials && {
             create: this.recipe(dto.materials, packaging),
           },
@@ -172,7 +173,12 @@ export class ProductsService {
     await this.prisma.$transaction(async (tx) => {
       await tx.product.update({
         where: { id },
-        data: { ...this.fields(dto), active: dto.active },
+        data: {
+          ...this.fields(dto),
+          price: packaging.price,
+          piecePrice: packaging.piecePrice,
+          active: dto.active,
+        },
       });
       if (dto.materials) {
         await tx.productMaterial.deleteMany({ where: { productId: id } });
@@ -250,6 +256,8 @@ export class ProductsService {
         piecesPerUnit: true,
         packSize: true,
         packUnit: true,
+        price: true,
+        piecePrice: true,
       },
     });
     return {
@@ -274,8 +282,6 @@ export class ProductsService {
       packSize: dto.packSize,
       packUnit: dto.packUnit,
       saleUnit: dto.saleUnit,
-      priceUnit: dto.priceUnit,
-      price: dto.price,
       mrp: dto.mrp,
       hsnCode:
         dto.hsnCode === undefined ? undefined : dto.hsnCode?.trim() || null,
@@ -295,27 +301,33 @@ export class ProductsService {
     piecesPerUnit?: number | null;
     packSize?: Prisma.Decimal | number | null;
     packUnit?: Packaging['packUnit'];
-    priceUnit?: Packaging['priceUnit'];
+    price?: Prisma.Decimal | number | null;
+    piecePrice?: Prisma.Decimal | number | null;
   }) {
     const keys = [
       'saleUnit',
       'piecesPerUnit',
       'packSize',
       'packUnit',
-      'priceUnit',
+      'price',
+      'piecePrice',
     ] as const;
     return Object.fromEntries(
       keys.filter((k) => src[k] !== undefined).map((k) => [k, src[k]]),
     ) as Partial<typeof src>;
   }
 
+  /** Validates packing and prices; returns them normalised (what gets saved). */
   private assertPackaging(p: ReturnType<ProductsService['packagingOf']>) {
+    const dec = (v: Prisma.Decimal | number | null | undefined) =>
+      v == null ? null : new Decimal(v);
     const packaging: Packaging = {
       saleUnit: p.saleUnit ?? 'PACK',
       piecesPerUnit: p.piecesPerUnit ?? null,
-      packSize: p.packSize == null ? null : new Decimal(p.packSize),
+      packSize: dec(p.packSize),
       packUnit: p.packUnit ?? null,
-      priceUnit: p.priceUnit ?? null,
+      price: dec(p.price),
+      piecePrice: dec(p.piecePrice),
     };
     if ((packaging.packSize === null) !== (packaging.packUnit === null))
       throw new BadRequestException('Give both the size and its unit');
@@ -323,10 +335,14 @@ export class ProductsService {
       throw new BadRequestException(
         "A product sold as pieces can't have pieces inside; choose pack, box or bag",
       );
-    const units = sellUnits(packaging);
-    if (packaging.priceUnit && !units.includes(packaging.priceUnit))
+    // Sold in one unit only: there is just one price.
+    if (sellUnits(packaging).length === 1) {
+      packaging.price = packaging.price ?? packaging.piecePrice ?? null;
+      packaging.piecePrice = null;
+    }
+    if (packaging.price == null && packaging.piecePrice == null)
       throw new BadRequestException(
-        `The price can be per ${unitsLabel(units, 'or per')}`,
+        `Enter a selling price per ${unitsLabel(sellUnits(packaging), 'or per')}`,
       );
     return packaging;
   }

@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { Prisma, Unit } from '../generated/prisma/client.js';
 import {
   packDescription,
-  pricePerSaleUnit,
+  defaultSellUnit,
   sellUnits,
   stockUnit,
   toSaleUnits,
   toStock,
   unitFactor,
+  unitPrice,
   type Packaging,
 } from './packaging.js';
 
@@ -24,7 +25,7 @@ const vermicelli: Packaging = {
   piecesPerUnit: null,
   packSize: D(25),
   packUnit: Unit.KG,
-  priceUnit: Unit.KG,
+  piecePrice: D(40),
 };
 const plain: Packaging = {
   saleUnit: Unit.BOX,
@@ -67,15 +68,21 @@ describe('packaging', () => {
     expect(() => toStock(plain, 1, Unit.KG)).toThrow();
   });
 
-  it('works out the price per unit sold', () => {
-    // ₹40/kg × 25 kg = ₹1000 per bag
-    expect(pricePerSaleUnit(vermicelli, D(40)).toString()).toBe('1000');
-    // price per pack stays as is
-    expect(pricePerSaleUnit(noodles, D(450)).toString()).toBe('450');
-    // ₹50 per piece × 10 = ₹500 per pack
-    expect(
-      pricePerSaleUnit({ ...noodles, priceUnit: Unit.PCS }, D(50)).toString(),
-    ).toBe('500');
+  it('uses each unit price, or works it out from the other', () => {
+    // Only a kg price: the bag price is 25 × ₹40, and new lines start in kg.
+    expect(unitPrice(vermicelli, Unit.KG)?.toString()).toBe('40');
+    expect(unitPrice(vermicelli, Unit.BAG)?.toString()).toBe('1000');
+    expect(defaultSellUnit(vermicelli)).toBe(Unit.KG);
+    // Only a pack price: a piece is a tenth of it.
+    const packOnly = { ...noodles, price: D(450) };
+    expect(unitPrice(packOnly, Unit.PCS)?.toString()).toBe('45');
+    expect(defaultSellUnit(packOnly)).toBe(Unit.PACK);
+    // Both set: each keeps its own price (a loose piece can cost more).
+    const both = { ...noodles, price: D(450), piecePrice: D(50) };
+    expect(unitPrice(both, Unit.PACK)?.toString()).toBe('450');
+    expect(unitPrice(both, Unit.PCS)?.toString()).toBe('50');
+    // No price at all.
+    expect(unitPrice(noodles, Unit.PACK)).toBeNull();
   });
 
   it('describes the packing', () => {

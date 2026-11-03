@@ -83,14 +83,17 @@ export class CreateProductDto {
   @IsEnum(Unit)
   saleUnit: Unit;
 
-  /** What `price` is for: the sale unit (default), a piece or a kg/L. */
+  /** Price per unit sold (pack, bag, …). Give this, `piecePrice`, or both. */
   @IsOptional()
-  @IsEnum(Unit)
-  priceUnit?: Unit | null;
-
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
-  price: number;
+  price?: number | null;
+
+  /** Price per piece, or per kg/L, when sold loose. */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  piecePrice?: number | null;
 
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
