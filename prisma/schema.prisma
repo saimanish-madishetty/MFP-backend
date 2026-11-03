@@ -504,3 +504,41 @@ model SaleLine {
 
   @@unique([saleId, lineNo])
 }
+
+// ─────────────────────────────────────────────────────────────
+// Expenses & bills
+// ─────────────────────────────────────────────────────────────
+
+/// A miscellaneous expense, recorded when it is paid (tea, transport, repairs, …).
+model Expense {
+  id        Int         @id @default(autoincrement())
+  date      DateTime    @db.Date
+  amount    Decimal     @db.Decimal(12, 2)
+  /// Free text with suggestions from past entries, e.g. "Transport"
+  category  String
+  note      String?
+  mode      PaymentMode @default(CASH)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([date])
+}
+
+/// A bill to pay by a due date (electricity, rent, …). Unpaid until marked paid.
+model Bill {
+  id        Int          @id @default(autoincrement())
+  /// Who or what, e.g. "Electricity" or "Shop rent"
+  name      String
+  amount    Decimal      @db.Decimal(12, 2)
+  billDate  DateTime?    @db.Date
+  dueDate   DateTime     @db.Date
+  paidOn    DateTime?    @db.Date
+  mode      PaymentMode?
+  /// UTR, cheque number, …
+  reference String?
+  note      String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([dueDate])
+}

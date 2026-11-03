@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { BuyersModule } from './buyers/buyers.module.js';
+import { ExpensesModule } from './expenses/expenses.module.js';
 import { HealthController } from './health/health.controller.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { ProductsModule } from './products/products.module.js';
@@ -19,6 +20,7 @@ import { WorkersModule } from './workers/workers.module.js';
     BuyersModule,
     SalesModule,
     SettingsModule,
+    ExpensesModule,
   ],
   controllers: [HealthController],
 })
