@@ -253,41 +253,42 @@ enum ProductMovementType {
 }
 
 model Product {
-  id           Int      @id @default(autoincrement())
+  id            Int      @id @default(autoincrement())
   /// e.g. "Mahadeva Maida Noodles 1.5mm" — never printed on invoices
-  internalName String   @unique
+  internalName  String   @unique
   /// e.g. "Mahadeva Noodles" — used on invoices and anything shared
-  publicName   String
-  code         String?  @unique
+  publicName    String
+  code          String?  @unique
   /// What one unit sold is called: PACK, BAG, BOX, …
-  saleUnit     Unit     @default(PACK)
+  saleUnit      Unit     @default(PACK)
   /// Pieces inside one unit sold (e.g. 10 for "10 × 500 g"); null = single packaging (e.g. a 25 kg bag)
   piecesPerUnit Int?
   /// Size of each piece, or of the whole unit when there are no pieces (e.g. 500 G, 25 KG)
-  packSize     Decimal? @db.Decimal(10, 3)
-  packUnit     Unit?
+  packSize      Decimal? @db.Decimal(10, 3)
+  packUnit      Unit?
   /// Price per unit sold (pack, bag, …). Null = worked out from piecePrice.
-  price        Decimal? @db.Decimal(12, 2)
+  price         Decimal? @db.Decimal(12, 2)
   /// Price per piece, or per kg/L, when sold loose (the stock unit). Null = worked out from price.
   /// At least one of price / piecePrice is set.
-  piecePrice   Decimal? @db.Decimal(12, 2)
-  mrp          Decimal? @db.Decimal(12, 2)
-  hsnCode      String?
+  piecePrice    Decimal? @db.Decimal(12, 2)
+  mrp           Decimal? @db.Decimal(12, 2)
+  hsnCode       String?
   /// Percent, e.g. 5.00; null = no GST
-  gstRate      Decimal? @db.Decimal(5, 2)
+  gstRate       Decimal? @db.Decimal(5, 2)
   /// Internal-only specs: [{ "key": "Thickness", "value": "1.5 mm" }]
-  specs        Json?
+  specs         Json?
   /// Finished goods in stock (running total), in the stock unit: pieces if the product has pieces,
   /// KG/L if it has a weight/volume, otherwise the sale unit (see src/products/packaging.ts)
-  currentQty   Decimal  @default(0) @db.Decimal(12, 3)
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  currentQty    Decimal  @default(0) @db.Decimal(12, 3)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   materials     ProductMaterial[]
   movements     ProductStockMovement[]
   saleLines     SaleLine[]
   materialUsage StockMovement[]
+  orders        Order[]
 }
 
 /// Recipe / bill of materials: how much of a material one sale unit uses
@@ -355,6 +356,7 @@ model Buyer {
 
   sales    Sale[]
   payments Payment[]
+  orders   Order[]
 
   @@index([name])
 }
@@ -550,6 +552,34 @@ model Bill {
   updatedAt DateTime     @updatedAt
 
   @@index([dueDate])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Orders
+// ─────────────────────────────────────────────────────────────
+
+/// An order a buyer has placed: a product and quantity, open until marked complete.
+model Order {
+  id          Int       @id @default(autoincrement())
+  buyerId     Int
+  productId   Int
+  /// In `unit` (the product's sale unit when the order was taken)
+  quantity    Decimal   @db.Decimal(12, 3)
+  unit        Unit
+  orderDate   DateTime  @db.Date
+  /// Deliver by; optional
+  dueDate     DateTime? @db.Date
+  note        String?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  buyer   Buyer   @relation(fields: [buyerId], references: [id])
+  /// Deleting a product deletes its orders
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([completedAt, dueDate])
+  @@index([buyerId])
 }
 
 // ─────────────────────────────────────────────────────────────
