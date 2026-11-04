@@ -25,3 +25,6 @@ services:
       # Comma-separated: the Vercel site URL and the Android app origin (https://localhost).
       - key: CORS_ORIGINS
         sync: false
+      # Signs login tokens. Render generates a random value once; changing it logs everyone out.
+      - key: AUTH_SECRET
+        generateValue: true

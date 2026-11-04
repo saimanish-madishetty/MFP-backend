@@ -551,3 +551,34 @@ model Bill {
 
   @@index([dueDate])
 }
+
+// ─────────────────────────────────────────────────────────────
+// Users & login
+// ─────────────────────────────────────────────────────────────
+
+enum UserRole {
+  /// Can see and change everything, and manage users
+  ADMIN
+  /// Can see everything, change nothing
+  VIEWER
+}
+
+/// Someone who can log in: mobile number + PIN. Added by an admin (no sign-up).
+model User {
+  id           Int       @id @default(autoincrement())
+  name         String
+  /// 10-digit mobile number, digits only
+  phone        String    @unique
+  /// scrypt hash of the PIN (see src/auth/pin.ts)
+  pinHash      String
+  role         UserRole  @default(VIEWER)
+  active       Boolean   @default(true)
+  /// Bumped on PIN reset, role change or disable: logins made before stop working
+  tokenVersion Int       @default(0)
+  /// Wrong PINs in a row; 5 locks the account for 15 minutes
+  failedLogins Int       @default(0)
+  lockedUntil  DateTime?
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}

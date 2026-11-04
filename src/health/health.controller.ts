@@ -1,4 +1,5 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { Public } from '../auth/decorators.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 @Controller('health')
@@ -7,6 +8,7 @@ export class HealthController {
 
   // Unauthenticated; pinged by UptimeRobot. Touching the DB also keeps Supabase from pausing.
   // `commit` (set by Render) lets the deploy script see when the new version is live.
+  @Public()
   @Get()
   async check() {
     const commit = process.env.RENDER_GIT_COMMIT ?? null;
