@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { ParseDateOnlyPipe } from '../common/parse-date-only.pipe.js';
 import { CancelSaleDto, MarkPaidDto, SaveSaleDto } from './dto/sale.dto.js';
-import { SalesService } from './sales.service.js';
+import { SalesService, type SaleSort } from './sales.service.js';
 
 @Controller('sales')
 export class SalesController {
@@ -30,6 +30,37 @@ export class SalesController {
       from,
       to,
       q: q?.trim() || undefined,
+    });
+  }
+
+  /** Sales page: a page of invoices plus totals over every match. */
+  @Get('search')
+  search(
+    @Query('status') status?: string,
+    @Query('buyerId') buyerId?: string,
+    @Query('productId') productId?: string,
+    @Query('from', ParseDateOnlyPipe) from?: string,
+    @Query('to', ParseDateOnlyPipe) to?: string,
+    @Query('q') q?: string,
+    @Query('sort') sort?: string,
+    @Query('offset') offset?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const int = (v?: string) =>
+      v ? Number.parseInt(v, 10) || undefined : undefined;
+    return this.sales.search({
+      status,
+      buyerId: int(buyerId),
+      productId: int(productId),
+      from,
+      to,
+      q: q?.trim() || undefined,
+      sort:
+        sort && ['new', 'old', 'high', 'low'].includes(sort)
+          ? (sort as SaleSort)
+          : undefined,
+      offset: int(offset),
+      limit: int(limit),
     });
   }
 

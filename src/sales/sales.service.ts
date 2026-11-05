@@ -43,10 +43,35 @@ const Decimal = Prisma.Decimal;
 export type SaleListQuery = {
   status?: string;
   buyerId?: number;
+  /** Invoices with this product on a line */
+  productId?: number;
   from?: string;
   to?: string;
   q?: string;
 };
+
+export type SaleSort = 'new' | 'old' | 'high' | 'low';
+
+const SORTS: Record<SaleSort, Prisma.SaleOrderByWithRelationInput[]> = {
+  new: [{ date: 'desc' }, { sequence: 'desc' }],
+  old: [{ date: 'asc' }, { sequence: 'asc' }],
+  high: [{ grandTotal: 'desc' }, { date: 'desc' }, { sequence: 'desc' }],
+  low: [{ grandTotal: 'asc' }, { date: 'desc' }, { sequence: 'desc' }],
+};
+
+const LIST_SELECT = {
+  id: true,
+  invoiceNumber: true,
+  date: true,
+  dueDate: true,
+  buyerId: true,
+  buyerName: true,
+  grandTotal: true,
+  amountPaid: true,
+  paymentStatus: true,
+  cancelledAt: true,
+  _count: { select: { lines: true } },
+} satisfies Prisma.SaleSelect;
 
 @Injectable()
 export class SalesService {
@@ -57,8 +82,71 @@ export class SalesService {
   ) {}
 
   async list(query: SaleListQuery) {
+    const sales = await this.prisma.sale.findMany({
+      where: this.listWhere(query),
+      orderBy: SORTS.new,
+      take: 300,
+      select: LIST_SELECT,
+    });
+    return this.listItems(sales);
+  }
+
+  /**
+   * One page of invoices matching the filters, plus totals over *all* matches (not just the page):
+   * how many, their value and what's still due (cancelled invoices count but add no money).
+   */
+  async search(
+    query: SaleListQuery & { sort?: SaleSort; offset?: number; limit?: number },
+  ) {
+    const where = this.listWhere(query);
+    const limit = Math.min(Math.max(query.limit ?? 50, 1), 500);
+    const offset = Math.max(query.offset ?? 0, 0);
+    const [sales, count, sums] = await Promise.all([
+      this.prisma.sale.findMany({
+        where,
+        orderBy: SORTS[query.sort ?? 'new'] ?? SORTS.new,
+        skip: offset,
+        take: limit,
+        select: LIST_SELECT,
+      }),
+      this.prisma.sale.count({ where }),
+      this.prisma.sale.aggregate({
+        where: { AND: [where, ACTIVE_SALE] },
+        _sum: { grandTotal: true, amountPaid: true },
+      }),
+    ]);
+    const total = new Decimal(sums._sum.grandTotal ?? 0);
+    const paid = new Decimal(sums._sum.amountPaid ?? 0);
+    return {
+      items: this.listItems(sales),
+      count,
+      total: total.toFixed(2),
+      due: Decimal.max(total.sub(paid), 0).toFixed(2),
+      hasMore: offset + sales.length < count,
+    };
+  }
+
+  private listItems(
+    sales: Prisma.SaleGetPayload<{ select: typeof LIST_SELECT }>[],
+  ) {
+    const today = todayIST();
+    return sales.map((s) => ({
+      ...s,
+      date: formatDate(s.date),
+      dueDate: formatDate(s.dueDate),
+      overdue:
+        !s.cancelledAt &&
+        s.paymentStatus !== SalePaymentStatus.PAID &&
+        s.dueDate < today,
+    }));
+  }
+
+  private listWhere(query: SaleListQuery): Prisma.SaleWhereInput {
     const where: Prisma.SaleWhereInput = {
       ...(query.buyerId && { buyerId: query.buyerId }),
+      ...(query.productId && {
+        lines: { some: { productId: query.productId } },
+      }),
       ...((query.from || query.to) && {
         date: {
           ...(query.from && { gte: parseDate(query.from) }),
@@ -82,35 +170,7 @@ export class SalesService {
         paymentStatus: SalePaymentStatus.PAID,
       });
     else if (query.status === 'CANCELLED') where.cancelledAt = { not: null };
-
-    const sales = await this.prisma.sale.findMany({
-      where,
-      orderBy: [{ date: 'desc' }, { sequence: 'desc' }],
-      take: 300,
-      select: {
-        id: true,
-        invoiceNumber: true,
-        date: true,
-        dueDate: true,
-        buyerId: true,
-        buyerName: true,
-        grandTotal: true,
-        amountPaid: true,
-        paymentStatus: true,
-        cancelledAt: true,
-        _count: { select: { lines: true } },
-      },
-    });
-    const today = todayIST();
-    return sales.map((s) => ({
-      ...s,
-      date: formatDate(s.date),
-      dueDate: formatDate(s.dueDate),
-      overdue:
-        !s.cancelledAt &&
-        s.paymentStatus !== SalePaymentStatus.PAID &&
-        s.dueDate < today,
-    }));
+    return where;
   }
 
   async get(id: number) {
