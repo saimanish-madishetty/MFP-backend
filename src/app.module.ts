@@ -5,6 +5,7 @@ import { BuyersModule } from './buyers/buyers.module.js';
 import { ExpensesModule } from './expenses/expenses.module.js';
 import { HealthController } from './health/health.controller.js';
 import { OrdersModule } from './orders/orders.module.js';
+import { WidgetsModule } from './widgets/widgets.controller.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { ProductsModule } from './products/products.module.js';
 import { SalesModule } from './sales/sales.module.js';
@@ -25,6 +26,7 @@ import { WorkersModule } from './workers/workers.module.js';
     SettingsModule,
     ExpensesModule,
     OrdersModule,
+    WidgetsModule,
   ],
   controllers: [HealthController],
 })
