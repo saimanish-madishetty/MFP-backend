@@ -3,8 +3,8 @@ import { todayIST } from '../common/dates.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { formatQty, formatStock, shortDay } from './format.js';
 
-/** Rows shown at most; a widget only fits a few. */
-const MAX_ROWS = 12;
+/** Rows sent at most; the widget lists scroll. */
+const MAX_ROWS = 100;
 
 /**
  * Data for the Android home-screen widgets, ready to show (the widgets don't format anything).
