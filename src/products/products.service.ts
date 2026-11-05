@@ -155,7 +155,14 @@ export class ProductsService {
 
   async update(id: number, dto: UpdateProductDto) {
     const current = await this.findOrThrow(id);
-    await this.assertUnique(dto, id);
+    // Restoring an archived product checks its name against the active ones.
+    const restoring = dto.active === true && !current.active;
+    await this.assertUnique(
+      dto,
+      id,
+      dto.internalName ?? (restoring ? current.internalName : undefined),
+      dto.active ?? current.active,
+    );
     await this.assertMaterials(dto.materials);
     const packaging = this.assertPackaging({
       ...this.packagingOf(current),
@@ -388,18 +395,22 @@ export class ProductsService {
     }));
   }
 
+  /**
+   * Name must differ from other *active* products (an archived one may share it); code from all.
+   * `name` is checked only when the product is (or becomes) active.
+   */
   private async assertUnique(
     dto: Partial<CreateProductDto>,
     exceptId?: number,
+    name = dto.internalName,
+    active = true,
   ) {
     const not = exceptId ? { id: { not: exceptId } } : {};
-    if (dto.internalName) {
+    if (name && active) {
       const existing = await this.prisma.product.findFirst({
         where: {
-          internalName: {
-            equals: dto.internalName.trim(),
-            mode: 'insensitive',
-          },
+          internalName: { equals: name.trim(), mode: 'insensitive' },
+          active: true,
           ...not,
         },
       });

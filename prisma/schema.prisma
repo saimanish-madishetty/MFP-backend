@@ -254,8 +254,9 @@ enum ProductMovementType {
 
 model Product {
   id            Int      @id @default(autoincrement())
-  /// e.g. "Mahadeva Maida Noodles 1.5mm" — never printed on invoices
-  internalName  String   @unique
+  /// e.g. "Mahadeva Maida Noodles 1.5mm" — never printed on invoices.
+  /// Unique among active products only (checked in ProductsService); an archived one may share it.
+  internalName  String
   /// e.g. "Mahadeva Noodles" — used on invoices and anything shared
   publicName    String
   code          String?  @unique
@@ -289,6 +290,8 @@ model Product {
   saleLines     SaleLine[]
   materialUsage StockMovement[]
   orders        Order[]
+
+  @@index([internalName])
 }
 
 /// Recipe / bill of materials: how much of a material one sale unit uses
