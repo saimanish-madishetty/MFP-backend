@@ -104,10 +104,20 @@ export class ProductionOutputDto {
   @IsInt()
   productId: number;
 
-  /** In the product's sale unit (packs, bags, …). */
+  /** In the product's sale unit (packs, bags, …). Give this or `stockQty`. */
+  @ValidateIf((o: ProductionOutputDto) => o.stockQty === undefined)
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
-  quantity: number;
+  quantity?: number;
+
+  /**
+   * In stock units (pieces, kg, …): lets a mix like 20 packs + 5 pieces be entered exactly.
+   * Takes precedence over `quantity`.
+   */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @IsPositive()
+  stockQty?: number;
 
   /** Raw materials actually used for this product; compared with the recipe to work out wastage. */
   @IsOptional()

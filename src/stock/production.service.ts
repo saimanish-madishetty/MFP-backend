@@ -97,6 +97,7 @@ export class ProductionService {
         products: entry.productMovements.map((pm) => ({
           productId: pm.productId,
           quantity: toSaleUnits(pm.product, pm.quantity).toString(),
+          stockQty: pm.quantity.toString(),
           materials: entry.materialMovements
             .filter((m) => m.productId === pm.productId)
             .map((m) => ({
@@ -142,18 +143,16 @@ export class ProductionService {
         include: { product: true },
       }),
     ]);
-    const madeOn = new Map(
-      made.map((m) => [
-        formatDate(m.date),
-        toSaleUnits(m.product, m.quantity).toString(),
-      ]),
-    );
+    const madeOn = new Map(made.map((m) => [formatDate(m.date), m]));
 
     const days = new Map<
       string,
       {
         date: string;
+        /** In sale units */
         made: string | null;
+        /** In stock units, e.g. pieces for 20 packs + 5 pieces */
+        madeStock: string | null;
         materials: Record<string, unknown>[];
       }
     >();
@@ -169,7 +168,13 @@ export class ProductionService {
       const date = formatDate(m.date);
       if (!days.has(date)) {
         if (days.size >= limit) continue;
-        days.set(date, { date, made: madeOn.get(date) ?? null, materials: [] });
+        const pm = madeOn.get(date);
+        days.set(date, {
+          date,
+          made: pm ? toSaleUnits(pm.product, pm.quantity).toString() : null,
+          madeStock: pm ? pm.quantity.toString() : null,
+          materials: [],
+        });
       }
       const used = m.quantity.neg();
       days.get(date)!.materials.push({
@@ -262,11 +267,17 @@ export class ProductionService {
       }
       for (const p of products) {
         const product = productById.get(p.productId)!;
+        // Stock units (exact for a pack + piece mix); recipes are per sale unit.
+        const stock =
+          p.stockQty !== undefined
+            ? new Decimal(p.stockQty)
+            : toStock(product, p.quantity!, product.saleUnit);
+        const made = toSaleUnits(product, stock);
         await applyProductMovement(tx, {
           productId: p.productId,
           date,
           type: ProductMovementType.PRODUCED,
-          quantity: toStock(product, p.quantity, product.saleUnit),
+          quantity: stock,
           productionEntryId: entry.id,
         });
         for (const m of p.materials ?? []) {
@@ -277,7 +288,7 @@ export class ProductionService {
             quantity: -m.quantity,
             productionEntryId: entry.id,
             productId: p.productId,
-            expectedQty: expectedUse(product, m.materialId, p.quantity),
+            expectedQty: expectedUse(product, m.materialId, made),
           });
         }
       }
