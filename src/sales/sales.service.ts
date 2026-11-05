@@ -153,11 +153,17 @@ export class SalesService {
           ...(query.to && { lte: parseDate(query.to) }),
         },
       }),
+      // Every word must match the invoice number or the buyer, in any order ("kumar 0012").
       ...(query.q && {
-        OR: [
-          { invoiceNumber: { contains: query.q, mode: 'insensitive' } },
-          { buyerName: { contains: query.q, mode: 'insensitive' } },
-        ],
+        AND: query.q
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((w) => ({
+            OR: [
+              { invoiceNumber: { contains: w, mode: 'insensitive' as const } },
+              { buyerName: { contains: w, mode: 'insensitive' as const } },
+            ],
+          })),
       }),
     };
     if (query.status === 'UNPAID')
