@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ProductsService } from './products.service.js';
+import { CreateProductDto } from './dto/product.dto.js';
 import {
   CreateProductGroupDto,
   GroupMemberDto,
@@ -58,7 +60,10 @@ const key = (options: string[]) =>
  */
 @Injectable()
 export class ProductGroupsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly products: ProductsService,
+  ) {}
 
   async get(id: number) {
     const group = await this.prisma.productGroup.findUnique({
@@ -76,12 +81,32 @@ export class ProductGroupsService {
 
   async create(dto: CreateProductGroupDto) {
     const fields = this.fields(dto);
-    const members = await this.checkMembers(fields.dimensions, dto.members);
+    const sizes = dto.sizes ?? [];
+    const members = await this.checkMembers(
+      fields.dimensions,
+      dto.members ?? [],
+      undefined,
+      sizes.map((s) => s.options),
+    );
     const id = await this.prisma.$transaction(async (tx) => {
       const group = await tx.productGroup.create({ data: fields });
       await this.applyMembers(tx, group, members);
       return group.id;
     });
+    // New sizes go through the normal product checks; if one fails, nothing is kept.
+    const created: number[] = [];
+    try {
+      for (const size of sizes) {
+        const p = await this.products.create(
+          Object.assign(new CreateProductDto(), size, { groupId: id }),
+        );
+        created.push(p.id);
+      }
+    } catch (err) {
+      for (const pid of created) await this.products.remove(pid);
+      await this.remove(id);
+      throw err;
+    }
     return this.get(id);
   }
 
@@ -133,12 +158,14 @@ export class ProductGroupsService {
     dimensions: string[],
     members: GroupMemberDto[],
     groupId?: number,
+    /** Values of sizes being created along with the group */
+    newSizes: string[][] = [],
   ) {
     if (dimensions.length === 0)
       throw new BadRequestException(
         'Add at least one dimension, e.g. Thickness or Weight',
       );
-    if (members.length === 0)
+    if (members.length + newSizes.length === 0)
       throw new BadRequestException('Add at least one size');
     const ids = members.map((m) => m.productId);
     if (new Set(ids).size !== ids.length)
@@ -155,6 +182,14 @@ export class ProductGroupsService {
         `${other.internalName} is already a size of ${other.group!.name}`,
       );
     const seen = new Set<string>();
+    for (const values of newSizes) {
+      const options = cleanOptions(dimensions, values);
+      if (seen.has(key(options)))
+        throw new BadRequestException(
+          `Two sizes are both ${options.join(' · ')}`,
+        );
+      seen.add(key(options));
+    }
     return members.map((m) => {
       const options = cleanOptions(dimensions, m.options);
       const k = key(options);

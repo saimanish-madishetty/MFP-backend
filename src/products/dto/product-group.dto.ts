@@ -1,4 +1,6 @@
+import { OmitType } from '@nestjs/mapped-types';
 import { Type } from 'class-transformer';
+import { CreateProductDto } from './product.dto.js';
 import {
   ArrayMaxSize,
   ArrayUnique,
@@ -23,6 +25,20 @@ export class GroupMemberDto {
   @IsString({ each: true })
   @MaxLength(40, { each: true })
   options: string[];
+}
+
+/** A brand-new size made along with the group: everything a product has except what the group gives. */
+export class NewSizeDto extends OmitType(CreateProductDto, [
+  'groupId',
+  'internalName',
+  'publicName',
+  'hsnCode',
+  'gstRate',
+] as const) {
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  declare options: string[];
 }
 
 export class CreateProductGroupDto {
@@ -68,6 +84,15 @@ export class CreateProductGroupDto {
   @ValidateNested({ each: true })
   @Type(() => GroupMemberDto)
   members: GroupMemberDto[];
+
+  /** New sizes to make along with the group (new group only). */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => NewSizeDto)
+  sizes?: NewSizeDto[];
 }
 
-export class UpdateProductGroupDto extends CreateProductGroupDto {}
+export class UpdateProductGroupDto extends OmitType(CreateProductGroupDto, [
+  'sizes',
+] as const) {}
