@@ -3,9 +3,24 @@ import { Prisma, Unit } from '../generated/prisma/client.js';
 import { formatQty, formatStock, shortDay } from './format.js';
 
 const D = (n: number) => new Prisma.Decimal(n);
-const noodles = { saleUnit: Unit.PACK, piecesPerUnit: 10, packSize: D(500), packUnit: Unit.G };
-const bag = { saleUnit: Unit.BAG, piecesPerUnit: null, packSize: D(25), packUnit: Unit.KG };
-const box = { saleUnit: Unit.BOX, piecesPerUnit: null, packSize: null, packUnit: null };
+const noodles = {
+  saleUnit: Unit.PACK,
+  piecesPerUnit: 10,
+  packSize: D(500),
+  packUnit: Unit.G,
+};
+const bag = {
+  saleUnit: Unit.BAG,
+  piecesPerUnit: null,
+  packSize: D(25),
+  packUnit: Unit.KG,
+};
+const box = {
+  saleUnit: Unit.BOX,
+  piecesPerUnit: null,
+  packSize: null,
+  packUnit: null,
+};
 
 describe('widget formatting', () => {
   it('formats quantities like the app', () => {

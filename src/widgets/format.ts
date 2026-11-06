@@ -1,5 +1,9 @@
 import { Unit } from '../generated/prisma/client.js';
-import { stockUnit, unitFactor, type Packaging } from '../products/packaging.js';
+import {
+  stockUnit,
+  unitFactor,
+  type Packaging,
+} from '../products/packaging.js';
 
 /** Same wording as the app (src/lib/stock.ts unitShort in the frontend). */
 const SHORT: Record<Unit, string> = {
@@ -40,7 +44,21 @@ export function formatStock(p: Packaging, stockQty: number | string): string {
   return `${formatQty(qty, su)} (${formatQty(qty / per, p.saleUnit)})`;
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
 
 /** "5 Nov" */
-export const shortDay = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+export const shortDay = (d: Date) =>
+  `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
