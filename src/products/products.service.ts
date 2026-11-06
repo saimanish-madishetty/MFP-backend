@@ -17,6 +17,7 @@ import {
   applyProductMovement,
   reverseProductMovement,
 } from './product-stock.js';
+import { cleanOptions, fromGroup } from './product-groups.service.js';
 import {
   packagingInfo,
   sellUnits,
@@ -30,6 +31,7 @@ import {
 const Decimal = Prisma.Decimal;
 
 const materialsInclude = {
+  group: { select: { id: true, name: true, dimensions: true } },
   materials: {
     include: {
       material: {
@@ -119,6 +121,10 @@ export class ProductsService {
   }
 
   async create(dto: CreateProductDto) {
+    const size = dto.groupId
+      ? await this.sizeOf(dto.groupId, dto.options ?? [])
+      : null;
+    if (size) Object.assign(dto, size.names);
     await this.assertUnique(dto);
     await this.assertMaterials(dto.materials);
     const packaging = this.assertPackaging(this.packagingOf(dto));
@@ -132,6 +138,7 @@ export class ProductsService {
       const created = await tx.product.create({
         data: {
           ...this.fields(dto),
+          ...(size && { groupId: dto.groupId, options: size.options }),
           price: packaging.price,
           piecePrice: packaging.piecePrice,
           materials: dto.materials && {
@@ -155,6 +162,17 @@ export class ProductsService {
 
   async update(id: number, dto: UpdateProductDto) {
     const current = await this.findOrThrow(id);
+    // A size's names, HSN and GST come from its group; only its values can change here.
+    let options: string[] | undefined;
+    if (current.groupId) {
+      const size = await this.sizeOf(
+        current.groupId,
+        dto.options ?? current.options,
+        id,
+      );
+      options = size.options;
+      Object.assign(dto, size.names);
+    }
     // Restoring an archived product checks its name against the active ones.
     const restoring = dto.active === true && !current.active;
     await this.assertUnique(
@@ -182,6 +200,7 @@ export class ProductsService {
         where: { id },
         data: {
           ...this.fields(dto),
+          options,
           price: packaging.price,
           piecePrice: packaging.piecePrice,
           active: dto.active,
@@ -303,6 +322,30 @@ export class ProductsService {
         },
       }),
     ]);
+  }
+
+  /** Checks a size's values against its group; returns them with the names, HSN and GST it takes. */
+  private async sizeOf(groupId: number, values: string[], exceptId?: number) {
+    const group = await this.prisma.productGroup.findUnique({
+      where: { id: groupId },
+      include: { products: { select: { id: true, options: true } } },
+    });
+    if (!group) throw new BadRequestException('Unknown product group');
+    const options = cleanOptions(group.dimensions, values);
+    const same = group.products.find(
+      (p) =>
+        p.id !== exceptId &&
+        p.options.join('|').toLowerCase() === options.join('|').toLowerCase(),
+    );
+    if (same)
+      throw new ConflictException(
+        `${group.name} already has the size ${options.join(' · ')}`,
+      );
+    const { gstRate, ...names } = fromGroup(group, options);
+    return {
+      options,
+      names: { ...names, gstRate: gstRate === null ? null : Number(gstRate) },
+    };
   }
 
   async findOrThrow(id: number) {

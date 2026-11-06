@@ -282,9 +282,15 @@ model Product {
   /// KG/L if it has a weight/volume, otherwise the sale unit (see src/products/packaging.ts)
   currentQty    Decimal  @default(0) @db.Decimal(12, 3)
   active        Boolean  @default(true)
+  /// Size of a product group (e.g. Maida Noodles): null = a product on its own.
+  /// When set, internalName, publicName, hsnCode and gstRate come from the group.
+  groupId       Int?
+  /// The size's value for each of the group's dimensions, same order, e.g. ["1.5mm", "500g"]
+  options       String[] @default([])
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
+  group         ProductGroup? @relation(fields: [groupId], references: [id])
   materials     ProductMaterial[]
   movements     ProductStockMovement[]
   saleLines     SaleLine[]
@@ -292,6 +298,28 @@ model Product {
   orders        Order[]
 
   @@index([internalName])
+  @@index([groupId])
+}
+
+/**
+ * One product made in several sizes (thickness, weight, …). Each size is a Product row with its
+ * own packing, prices, recipe and stock; the group holds what they share. A size's names are
+ * "<group name> <option values>", kept in sync by ProductGroupsService.
+ */
+model ProductGroup {
+  id          Int      @id @default(autoincrement())
+  /// e.g. "Mahadeva Maida Noodles"
+  name        String
+  /// Printed on invoices for every size, e.g. "Mahadeva Noodles"
+  publicName  String
+  hsnCode     String?
+  gstRate     Decimal? @db.Decimal(5, 2)
+  /// e.g. ["Thickness", "Weight"]
+  dimensions  String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products    Product[]
 }
 
 /// Recipe / bill of materials: how much of a material one sale unit uses

@@ -14,6 +14,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Unit } from '../../generated/prisma/enums.js';
@@ -46,13 +47,27 @@ export class ProductMaterialDto {
 }
 
 export class CreateProductDto {
-  /** Owner's name, e.g. "Mahadeva Maida Noodles 1.5mm". */
+  /** A new size of this product group; names, HSN and GST then come from the group. */
+  @IsOptional()
+  @IsInt()
+  groupId?: number;
+
+  /** The size's value for each of the group's dimensions, e.g. ["1.5mm", "500g"]. */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  options?: string[];
+
+  /** Owner's name, e.g. "Mahadeva Maida Noodles 1.5mm". Not needed for a size of a group. */
+  @ValidateIf((o: CreateProductDto) => !o.groupId)
   @IsString()
   @IsNotEmpty()
   @MaxLength(150)
   internalName: string;
 
-  /** Printed on invoices, e.g. "Mahadeva Noodles". */
+  /** Printed on invoices, e.g. "Mahadeva Noodles". Not needed for a size of a group. */
+  @ValidateIf((o: CreateProductDto) => !o.groupId)
   @IsString()
   @IsNotEmpty()
   @MaxLength(150)
@@ -137,8 +152,9 @@ export class CreateProductDto {
   openingDate?: string;
 }
 
+/** A size's group can't change here (see ProductGroupsService); its `options` can. */
 export class UpdateProductDto extends PartialType(
-  OmitType(CreateProductDto, ['openingQty', 'openingDate'] as const),
+  OmitType(CreateProductDto, ['openingQty', 'openingDate', 'groupId'] as const),
 ) {
   @IsOptional()
   @IsBoolean()
