@@ -21,3 +21,6 @@ Thumbs.db
 
 # Editor settings (kept on this machine, not in Git)
 .vscode/
+
+# SSH keys must never be committed (this repo is public).
+.ssh/

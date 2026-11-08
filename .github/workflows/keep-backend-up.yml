@@ -1,0 +1,56 @@
+# Brings the Render backend back when it stops answering.
+#
+# On Render's free plan the service sometimes sleeps and then never wakes up on incoming requests
+# (0 instances, not suspended); only a new deploy brings it back. Every 10 minutes this checks
+# /health/live (no database) and, if it doesn't answer, starts a deploy of the current commit
+# through the Render API: the same as Manual Deploy in the dashboard.
+#
+# Needs the repository secret RENDER_API_KEY (Settings → Secrets and variables → Actions).
+name: Keep backend up
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # GitHub may run it a few minutes late
+  workflow_dispatch: # "Run workflow" button, for testing
+
+concurrency:
+  group: keep-backend-up
+  cancel-in-progress: false
+
+env:
+  SERVICE_ID: srv-dbkgut6c6qcc73fq07k0
+  HEALTH_URL: https://mfp-backend.onrender.com/health/live
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Check the backend answers
+        id: health
+        run: |
+          # A sleeping free instance takes up to ~60 s to wake, so wait up to 90 s, twice.
+          for i in 1 2; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 "$HEALTH_URL" || true)
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then echo "up=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+            sleep 15
+          done
+          echo "up=false" >> "$GITHUB_OUTPUT"
+
+      - name: Redeploy on Render
+        if: steps.health.outputs.up == 'false'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          api() { curl -sS --fail-with-body -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" "$@"; }
+          # Don't start another deploy while one is already running.
+          status=$(api "https://api.render.com/v1/services/$SERVICE_ID/deploys?limit=1" | jq -r '.[0].deploy.status')
+          echo "latest deploy: $status"
+          case "$status" in
+            created|queued|build_in_progress|update_in_progress|pre_deploy_in_progress)
+              echo "A deploy is already in progress; nothing to do."; exit 0 ;;
+          esac
+          api -X POST -H "Content-Type: application/json" -d '{"clearCache":"do_not_clear"}' \
+            "https://api.render.com/v1/services/$SERVICE_ID/deploys" | jq '{id: .id, status: .status}'
+          echo "::warning::Backend was not answering; started a redeploy on Render."
