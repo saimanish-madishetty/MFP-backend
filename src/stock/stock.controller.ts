@@ -118,6 +118,12 @@ export class StockController {
     return this.production.wastage(productId);
   }
 
+  /** Wastage screen: materials used vs. recipe per product and day (`month` = "2026-11", or all). */
+  @Get('production/wastage/lines')
+  wastageLines(@Query('month') month?: string) {
+    return this.production.wastageLines(month || undefined);
+  }
+
   @Get('production/recent')
   recent() {
     return this.production.recent();

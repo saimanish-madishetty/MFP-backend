@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import {
+  MaterialType,
   Prisma,
   ProductMovementType,
   StockMovementType,
@@ -41,16 +42,75 @@ function expectedUse(
   return perUnit.mul(made).toDecimalPlaces(3);
 }
 
-/** Wastage = used − expected (negative means less was used than the recipe says). */
-function waste(used: Prisma.Decimal, expected: Prisma.Decimal | null) {
-  if (expected === null) return { waste: null, wastePct: null };
+/**
+ * Wastage = used − expected (negative means less was used than the recipe says). With `cost` (the
+ * material's latest price per unit) also its value in ₹: an estimate, at today's price.
+ */
+function waste(
+  used: Prisma.Decimal,
+  expected: Prisma.Decimal | null,
+  cost?: Prisma.Decimal | null,
+) {
+  if (expected === null) return { waste: null, wastePct: null, value: null };
   const w = used.sub(expected);
   return {
     waste: w.toString(),
     wastePct: expected.gt(0)
       ? w.div(expected).mul(100).toDecimalPlaces(1).toString()
       : null,
+    value: cost ? w.mul(cost).toDecimalPlaces(2).toString() : null,
   };
+}
+
+type WasteLine = ReturnType<typeof waste> & {
+  material: { id: number; name: string; unit: string };
+  used: string;
+  expected: string | null;
+};
+
+/** A material as the wastage endpoints send it (no price). */
+const materialOut = (m: { id: number; name: string; unit: string }) => ({
+  id: m.id,
+  name: m.name,
+  unit: m.unit,
+});
+
+/** One material used for a product, compared with the recipe, with its ₹ value. */
+function wasteLine(m: {
+  quantity: Prisma.Decimal;
+  expectedQty: Prisma.Decimal | null;
+  material: {
+    id: number;
+    name: string;
+    unit: string;
+    lastCostPerUnit: Prisma.Decimal | null;
+  };
+}): WasteLine {
+  const used = m.quantity.neg();
+  return {
+    material: materialOut(m.material),
+    used: used.toString(),
+    expected: m.expectedQty?.toString() ?? null,
+    ...waste(used, m.expectedQty, m.material.lastCostPerUnit),
+  };
+}
+
+const sumValues = (values: (string | null)[]) =>
+  values.reduce((sum, v) => sum.add(v ?? 0), new Decimal(0)).toString();
+
+const wasteMaterial = {
+  select: { id: true, name: true, unit: true, lastCostPerUnit: true },
+} as const;
+
+/** First day of the month and of the next one, for a "YYYY-MM" month. */
+function monthRange(month: string) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))
+    throw new BadRequestException('Month must look like 2026-11');
+  const from = parseDate(`${month}-01`);
+  const to = new Date(
+    Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + 1, 1),
+  );
+  return { from, to };
 }
 
 /**
@@ -134,9 +194,7 @@ export class ProductionService {
       this.prisma.stockMovement.findMany({
         where: { productId, type: StockMovementType.USAGE },
         orderBy: [{ date: 'desc' }, { id: 'asc' }],
-        include: {
-          material: { select: { id: true, name: true, unit: true } },
-        },
+        include: { material: wasteMaterial },
       }),
       this.prisma.productStockMovement.findMany({
         where: { productId, type: ProductMovementType.PRODUCED },
@@ -144,6 +202,13 @@ export class ProductionService {
       }),
     ]);
     const madeOn = new Map(made.map((m) => [formatDate(m.date), m]));
+    // Every production day, also those with no materials entered for the product.
+    const dates = [
+      ...new Set([...usage, ...made].map((m) => formatDate(m.date))),
+    ]
+      .sort()
+      .reverse()
+      .slice(0, limit);
 
     const days = new Map<
       string,
@@ -153,9 +218,21 @@ export class ProductionService {
         made: string | null;
         /** In stock units, e.g. pieces for 20 packs + 5 pieces */
         madeStock: string | null;
-        materials: Record<string, unknown>[];
+        /** ₹, at today's material prices */
+        wasteValue: string;
+        materials: WasteLine[];
       }
     >();
+    for (const date of dates) {
+      const pm = madeOn.get(date);
+      days.set(date, {
+        date,
+        made: pm ? toSaleUnits(pm.product, pm.quantity).toString() : null,
+        madeStock: pm ? pm.quantity.toString() : null,
+        wasteValue: '0',
+        materials: [],
+      });
+    }
     const totals = new Map<
       number,
       {
@@ -165,24 +242,10 @@ export class ProductionService {
       }
     >();
     for (const m of usage) {
-      const date = formatDate(m.date);
-      if (!days.has(date)) {
-        if (days.size >= limit) continue;
-        const pm = madeOn.get(date);
-        days.set(date, {
-          date,
-          made: pm ? toSaleUnits(pm.product, pm.quantity).toString() : null,
-          madeStock: pm ? pm.quantity.toString() : null,
-          materials: [],
-        });
-      }
+      const day = days.get(formatDate(m.date));
+      if (!day) continue; // older than the last `limit` days
       const used = m.quantity.neg();
-      days.get(date)!.materials.push({
-        material: m.material,
-        used: used.toString(),
-        expected: m.expectedQty?.toString() ?? null,
-        ...waste(used, m.expectedQty),
-      });
+      day.materials.push(wasteLine(m));
       if (m.expectedQty !== null) {
         const t = totals.get(m.materialId) ?? {
           material: m.material,
@@ -195,13 +258,148 @@ export class ProductionService {
       }
     }
     return {
-      days: [...days.values()],
+      days: [...days.values()].map((d) => ({
+        ...d,
+        wasteValue: sumValues(d.materials.map((m) => m.value)),
+      })),
       totals: [...totals.values()].map((t) => ({
-        material: t.material,
+        material: materialOut(t.material),
         used: t.used.toString(),
         expected: t.expected.toString(),
-        ...waste(t.used, t.expected),
+        ...waste(t.used, t.expected, t.material.lastCostPerUnit),
       })),
+    };
+  }
+
+  /**
+   * Wastage screen: every material used for a product, per production day, vs. what the recipe
+   * says it should have taken. The screen adds these up for the materials chosen in its filter.
+   * `month` ("2026-11") limits it to that month; without it, all days.
+   *
+   * Raw materials are entered per product, with the recipe's quantity saved at the time. Supplies
+   * (covers, boxes, …) are entered for the day as a whole, so for them the expected quantity is
+   * worked out from the products made that day and their current recipes, and the day's use is
+   * shared out between those products in proportion (`shared`). Materials used for no product and
+   * in no recipe that day are left out: there's nothing to compare them with.
+   */
+  async wastageLines(month?: string) {
+    const date = month ? monthRange(month) : undefined;
+    const dateWhere = date ? { gte: date.from, lt: date.to } : undefined;
+    const [usage, made, materials] = await Promise.all([
+      this.prisma.stockMovement.findMany({
+        where: { type: StockMovementType.USAGE, date: dateWhere },
+        orderBy: [{ date: 'asc' }, { id: 'asc' }],
+        select: {
+          date: true,
+          productId: true,
+          materialId: true,
+          quantity: true,
+          expectedQty: true,
+        },
+      }),
+      this.prisma.productStockMovement.findMany({
+        where: { type: ProductMovementType.PRODUCED, date: dateWhere },
+        orderBy: [{ date: 'asc' }, { id: 'asc' }],
+        include: { product: { include: recipeInclude } },
+      }),
+      this.prisma.material.findMany({
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          unit: true,
+          lastCostPerUnit: true,
+        },
+      }),
+    ]);
+    const typeOf = new Map(materials.map((m) => [m.id, m.type]));
+    const isSupply = (id: number) => typeOf.get(id) === MaterialType.SUPPLY;
+
+    type Line = {
+      date: string;
+      productId: number;
+      materialId: number;
+      used: string;
+      /** null: the material isn't in the product's recipe (or has no quantity there) */
+      expected: string | null;
+      /** A supply: the day's use shared out between the products made */
+      shared?: true;
+    };
+    const lines: Line[] = [];
+
+    // Raw materials: entered per product, expected saved with them.
+    for (const u of usage) {
+      if (u.productId === null || isSupply(u.materialId)) continue;
+      lines.push({
+        date: formatDate(u.date),
+        productId: u.productId,
+        materialId: u.materialId,
+        used: u.quantity.neg().toString(),
+        expected: u.expectedQty?.toString() ?? null,
+      });
+    }
+
+    // Supplies: per day, the day's use vs. what the products made that day should have taken.
+    const supplyUsed = new Map<string, Prisma.Decimal>(); // "date|materialId"
+    for (const u of usage) {
+      if (!isSupply(u.materialId)) continue;
+      const key = `${formatDate(u.date)}|${u.materialId}`;
+      supplyUsed.set(
+        key,
+        (supplyUsed.get(key) ?? new Decimal(0)).add(u.quantity.neg()),
+      );
+    }
+    const supplyExpected = new Map<
+      string,
+      { productId: number; expected: Prisma.Decimal }[]
+    >();
+    for (const pm of made) {
+      const units = toSaleUnits(pm.product, pm.quantity);
+      for (const r of pm.product.materials) {
+        if (!isSupply(r.materialId)) continue;
+        const expected = expectedUse(pm.product, r.materialId, units);
+        if (expected === null) continue;
+        const key = `${formatDate(pm.date)}|${r.materialId}`;
+        supplyExpected.set(key, [
+          ...(supplyExpected.get(key) ?? []),
+          { productId: pm.productId, expected },
+        ]);
+      }
+    }
+    for (const [key, shares] of supplyExpected) {
+      const [day, materialId] = key.split('|');
+      const used = supplyUsed.get(key) ?? new Decimal(0);
+      const total = shares.reduce((t, x) => t.add(x.expected), new Decimal(0));
+      for (const x of shares)
+        lines.push({
+          date: day,
+          productId: x.productId,
+          materialId: Number(materialId),
+          used: (total.gt(0) ? used.mul(x.expected).div(total) : new Decimal(0))
+            .toDecimalPlaces(3)
+            .toString(),
+          expected: x.expected.toString(),
+          shared: true,
+        });
+    }
+    lines.sort((a, b) => a.date.localeCompare(b.date));
+
+    const usedIds = new Set(lines.map((l) => l.materialId));
+    return {
+      materials: materials
+        .filter((m) => usedIds.has(m.id))
+        .map((m) => ({
+          ...m,
+          lastCostPerUnit: m.lastCostPerUnit?.toString() ?? null,
+        })),
+      /** Products made: `made` in sale units, `madeStock` in stock units */
+      made: made.map((pm) => ({
+        date: formatDate(pm.date),
+        productId: pm.productId,
+        made: toSaleUnits(pm.product, pm.quantity).toString(),
+        madeStock: pm.quantity.toString(),
+      })),
+      lines,
     };
   }
 
