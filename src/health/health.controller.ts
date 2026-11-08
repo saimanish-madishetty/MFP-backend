@@ -53,6 +53,17 @@ export class HealthController {
     return { status: 'ok', db: 'up', commit };
   }
 
+  /**
+   * Render's health check (render.yaml `healthCheckPath`). Answers as soon as the app runs, without
+   * the database: Render only sends traffic to a woken-up free instance once this passes, so a
+   * slow first database connection must not keep the whole service from coming back.
+   */
+  @Public()
+  @Get('live')
+  live() {
+    return { status: 'ok', commit: process.env.RENDER_GIT_COMMIT ?? null };
+  }
+
   /** Failed checks in a row; UptimeRobot checks every few minutes. */
   private failures = 0;
 }

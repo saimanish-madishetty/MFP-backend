@@ -12,7 +12,8 @@ services:
     # Migrations run during the build (the free plan has no pre-deploy step).
     buildCommand: npm ci && npx prisma migrate deploy && npm run build
     startCommand: npm run start:prod
-    healthCheckPath: /health
+    # No database here: Render waits for this before sending traffic to a woken-up instance.
+    healthCheckPath: /health/live
     envVars:
       - key: NODE_VERSION
         value: "24"
