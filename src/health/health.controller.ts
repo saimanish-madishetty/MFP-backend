@@ -31,15 +31,31 @@ export class HealthController {
         ),
       ]);
     } catch (err) {
+      this.failures++;
       this.logger.error(
-        `Health check: database down: ${(err as Error).message}`,
+        `Health check: database down (${this.failures} in a row): ${(err as Error).message}`,
       );
+      // Last resort: if the database connections are stuck, only a fresh process clears them.
+      // On Render, exiting makes it start a new one (what a manual deploy did by hand).
+      if (this.failures >= RESTART_AFTER && process.env.RENDER) {
+        this.logger.error(
+          `Restarting: ${RESTART_AFTER} failed health checks in a row`,
+        );
+        setTimeout(() => process.exit(1), 500);
+      }
       throw new ServiceUnavailableException({
         status: 'error',
         db: 'down',
         commit,
       });
     }
+    this.failures = 0;
     return { status: 'ok', db: 'up', commit };
   }
+
+  /** Failed checks in a row; UptimeRobot checks every few minutes. */
+  private failures = 0;
 }
+
+/** Failed health checks in a row before the backend restarts itself (on Render only). */
+const RESTART_AFTER = 3;

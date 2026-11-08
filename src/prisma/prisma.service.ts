@@ -16,6 +16,8 @@ export class PrismaService
       // the logs. With them, requests fail with an error that says what went wrong.
       connectionTimeoutMillis: 10_000,
       query_timeout: 30_000,
+      // Notices connections dropped silently on the way to Supabase, instead of waiting on them.
+      keepAlive: true,
     });
     super({ adapter });
   }
