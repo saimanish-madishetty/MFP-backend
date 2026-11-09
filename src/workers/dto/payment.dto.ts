@@ -29,9 +29,14 @@ export class CreateAdvanceDto {
 }
 
 export class CreateSettlementDto {
-  /** Pay period ends on this date (and payment is made on it). */
+  /** The day the money was paid. */
   @IsDateOnly()
   paidOn: string;
+
+  /** Pay period ends on this date (pay up to and including it). Defaults to `paidOn`. */
+  @IsOptional()
+  @IsDateOnly()
+  upTo?: string;
 
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)

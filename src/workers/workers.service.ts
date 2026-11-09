@@ -172,17 +172,19 @@ export class WorkersService {
   async settle(id: number, dto: CreateSettlementDto) {
     const worker = await this.findOrThrow(id);
     const paidOn = parseDate(dto.paidOn);
-    if (paidOn > todayIST())
+    const upToStr = dto.upTo ?? dto.paidOn;
+    const upTo = parseDate(upToStr);
+    if (paidOn > todayIST() || upTo > todayIST())
       throw new BadRequestException('Date cannot be in the future');
 
     return this.prisma.$transaction(async (tx) => {
-      const s = await this.pay.summarize(worker, paidOn, tx);
-      if (s.lastSettledOn && dto.paidOn <= s.lastSettledOn) {
+      const s = await this.pay.summarize(worker, upTo, tx);
+      if (s.lastSettledOn && upToStr <= s.lastSettledOn) {
         throw new BadRequestException(
           `Already settled up to ${s.lastSettledOn}. Choose a later date.`,
         );
       }
-      if (dto.paidOn < s.periodStart) {
+      if (upToStr < s.periodStart) {
         throw new BadRequestException(
           'Date is before the start of the pay period',
         );
@@ -192,7 +194,7 @@ export class WorkersService {
         data: {
           workerId: id,
           periodStart: parseDate(s.periodStart),
-          periodEnd: paidOn,
+          periodEnd: upTo,
           daysWorked: s.daysWorked,
           earned: s.earned,
           bonus: s.bonus,
