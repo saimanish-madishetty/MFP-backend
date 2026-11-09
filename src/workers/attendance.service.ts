@@ -49,6 +49,8 @@ export class AttendanceService {
           bonus: record ? record.bonus.toFixed(2) : '0.00',
           note: record?.note ?? null,
           settled: settledUpTo !== undefined && date <= settledUpTo,
+          /** One full day's pay: as saved for the day, or the worker's current rate */
+          dayValue: (record?.dayValue ?? dayValueFor(w)).toFixed(2),
         };
       }),
     };
