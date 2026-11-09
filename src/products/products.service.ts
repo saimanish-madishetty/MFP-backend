@@ -421,10 +421,7 @@ export class ProductsService {
       packaging.price = packaging.price ?? packaging.piecePrice ?? null;
       packaging.piecePrice = null;
     }
-    if (packaging.price == null && packaging.piecePrice == null)
-      throw new BadRequestException(
-        `Enter a selling price per ${unitsLabel(sellUnits(packaging), 'or per')}`,
-      );
+    // No price is fine: many products are priced only at sale, after negotiating.
     return packaging;
   }
 

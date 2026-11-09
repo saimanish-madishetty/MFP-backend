@@ -327,9 +327,11 @@ export class ProductionService {
     };
     const lines: Line[] = [];
 
-    // Raw materials: entered per product, expected saved with them.
+    // Entered per product (raw materials, and supplies from the recipe): expected saved with them.
+    const direct = new Set<string>(); // "date|materialId|productId"
     for (const u of usage) {
-      if (u.productId === null || isSupply(u.materialId)) continue;
+      if (u.productId === null) continue;
+      direct.add(`${formatDate(u.date)}|${u.materialId}|${u.productId}`);
       lines.push({
         date: formatDate(u.date),
         productId: u.productId,
@@ -339,10 +341,11 @@ export class ProductionService {
       });
     }
 
-    // Supplies: per day, the day's use vs. what the products made that day should have taken.
+    // Supplies entered for the day as a whole: the day's use vs. what the products made that day
+    // (and not given their own line) should have taken.
     const supplyUsed = new Map<string, Prisma.Decimal>(); // "date|materialId"
     for (const u of usage) {
-      if (!isSupply(u.materialId)) continue;
+      if (!isSupply(u.materialId) || u.productId !== null) continue;
       const key = `${formatDate(u.date)}|${u.materialId}`;
       supplyUsed.set(
         key,
@@ -359,6 +362,8 @@ export class ProductionService {
         if (!isSupply(r.materialId)) continue;
         const expected = expectedUse(pm.product, r.materialId, units);
         if (expected === null) continue;
+        if (direct.has(`${formatDate(pm.date)}|${r.materialId}|${pm.productId}`))
+          continue;
         const key = `${formatDate(pm.date)}|${r.materialId}`;
         supplyExpected.set(key, [
           ...(supplyExpected.get(key) ?? []),
