@@ -38,6 +38,6 @@ describe('widget formatting', () => {
   });
 
   it('formats short dates', () => {
-    expect(shortDay(new Date('2026-11-05T00:00:00Z'))).toBe('5 Nov');
+    expect(shortDay(new Date('2026-11-05T00:00:00Z'))).toBe('05/11/26');
   });
 });

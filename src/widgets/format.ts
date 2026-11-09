@@ -44,21 +44,5 @@ export function formatStock(p: Packaging, stockQty: number | string): string {
   return `${formatQty(qty, su)} (${formatQty(qty / per, p.saleUnit)})`;
 }
 
-const MONTHS = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
-/** "5 Nov" */
-export const shortDay = (d: Date) =>
-  `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+/** "05/11/26" (DD/MM/YY, as everywhere in the app) */
+export const shortDay = (d: Date) => d.toISOString().slice(2, 10).split('-').reverse().join('/');
