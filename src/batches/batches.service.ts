@@ -222,6 +222,15 @@ export class BatchesService {
           select: { productId: true, quantity: true },
           orderBy: { id: 'asc' },
         },
+        // Raw materials put in at the start
+        materialMovements: {
+          where: { batchPackingId: null },
+          select: {
+            quantity: true,
+            material: { select: { id: true, name: true, unit: true } },
+          },
+          orderBy: { id: 'asc' },
+        },
       },
     });
     return batches.map((b) => ({
@@ -238,6 +247,12 @@ export class BatchesService {
         ? formatDate(b.stageDates[0].date)
         : formatDate(b.startDate),
       materialsLost: b.materialsLost,
+      materials: b.materialMovements.map((m) => ({
+        materialId: m.material.id,
+        name: m.material.name,
+        unit: m.material.unit,
+        quantity: m.quantity.neg().toString(),
+      })),
       products: addUpProducts(b.productMovements).map((m) => ({
         productId: m.productId,
         stockQty: m.quantity.toString(),
