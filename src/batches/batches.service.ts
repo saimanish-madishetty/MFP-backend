@@ -25,6 +25,7 @@ import {
   CancelBatchDto,
   CreateBatchPlanDto,
   FinishBatchDto,
+  PackBatchDto,
   StartBatchDto,
   UpdateBatchDto,
   UpdateBatchPlanDto,
@@ -54,6 +55,7 @@ const batchInclude = {
     orderBy: { id: 'asc' },
     include: { product: { include: recipeInclude } },
   },
+  packings: { orderBy: [{ date: 'asc' }, { id: 'asc' }] },
 } satisfies Prisma.BatchInclude;
 
 type BatchFull = Prisma.BatchGetPayload<{ include: typeof batchInclude }>;
@@ -69,6 +71,19 @@ function assertNotFuture(date: Date) {
 function numberPrefix(date: Date) {
   const [y, m, d] = formatDate(date).split('-');
   return `B-${d}${m}${y.slice(2)}-`;
+}
+
+/** Movements of the same product added up (a batch can be packed in parts). */
+function addUpProducts<
+  T extends { productId: number; quantity: Prisma.Decimal; product?: P },
+  P = unknown,
+>(movements: T[]) {
+  const by = new Map<number, T & { quantity: Prisma.Decimal }>();
+  for (const m of movements) {
+    const prev = by.get(m.productId);
+    by.set(m.productId, prev ? { ...prev, quantity: prev.quantity.add(m.quantity) } : { ...m });
+  }
+  return [...by.values()];
 }
 
 /**
@@ -95,7 +110,7 @@ export class BatchesService {
           take: 1,
           select: {
             materialMovements: {
-              where: { batchAtFinish: false },
+              where: { batchPackingId: null },
               select: { materialId: true },
               orderBy: { id: 'asc' },
             },
@@ -223,7 +238,7 @@ export class BatchesService {
         ? formatDate(b.stageDates[0].date)
         : formatDate(b.startDate),
       materialsLost: b.materialsLost,
-      products: b.productMovements.map((m) => ({
+      products: addUpProducts(b.productMovements).map((m) => ({
         productId: m.productId,
         stockQty: m.quantity.toString(),
       })),
@@ -265,7 +280,7 @@ export class BatchesService {
           stageDates: { create: { stage: 0, date } },
         },
       });
-      await this.useMaterials(tx, batch.id, number, date, dto.materials, false);
+      await this.useMaterials(tx, batch.id, number, date, dto.materials);
       return batch.id;
     });
     return this.get(id);
@@ -277,9 +292,12 @@ export class BatchesService {
     const date = dto.date ? parseDate(dto.date) : batch.startDate;
     assertNotFuture(date);
     const later = batch.stageDates.filter((s) => s.stage > 0);
-    if (later.some((s) => s.date < date))
+    if (
+      later.some((s) => s.date < date) ||
+      batch.packings.some((p) => p.date < date)
+    )
       throw new BadRequestException(
-        'The start date must be on or before the dates of the later stages',
+        'The start date must be on or before the later stages and packings',
       );
     if (dto.materials) await this.assertMaterials(dto.materials);
 
@@ -296,11 +314,14 @@ export class BatchesService {
         data: { date },
       });
       if (dto.materials) {
-        for (const m of batch.materialMovements) await reverseMovement(tx, m);
-        await this.useMaterials(tx, id, batch.number, date, dto.materials, false);
+        for (const m of batch.materialMovements.filter(
+          (x) => x.batchPackingId === null,
+        ))
+          await reverseMovement(tx, m);
+        await this.useMaterials(tx, id, batch.number, date, dto.materials);
       } else {
         await tx.stockMovement.updateMany({
-          where: { batchId: id },
+          where: { batchId: id, batchPackingId: null },
           data: { date },
         });
       }
@@ -347,30 +368,53 @@ export class BatchesService {
     return this.get(id);
   }
 
-  /** What was made (added to finished stock) and the packing supplies used: the batch is done. */
+  /** Packs made from the batch on a day (added to finished stock) and the packing supplies used. */
+  async pack(id: number, dto: PackBatchDto) {
+    const batch = await this.openOrThrow(id);
+    await this.assertPacking(batch, dto);
+    await this.prisma.$transaction((tx) => this.addPacking(tx, batch, dto));
+    return this.get(id);
+  }
+
+  /** Removes a packing entered by mistake: its packs and supplies are taken back out of stock. */
+  async removePacking(id: number, packingId: number) {
+    const batch = await this.openOrThrow(id);
+    if (!batch.packings.some((p) => p.id === packingId))
+      throw new NotFoundException('Packing not found');
+    await this.prisma.$transaction(async (tx) => {
+      for (const m of batch.productMovements.filter(
+        (x) => x.batchPackingId === packingId,
+      ))
+        await reverseProductMovement(tx, m);
+      for (const m of batch.materialMovements.filter(
+        (x) => x.batchPackingId === packingId,
+      ))
+        await reverseMovement(tx, m);
+      await tx.batchPacking.delete({ where: { id: packingId } });
+    });
+    return this.get(id);
+  }
+
+  /** Closes the batch (with a last packing if products are given) and works out its wastage. */
   async finish(id: number, dto: FinishBatchDto) {
     const batch = await this.openOrThrow(id);
+    const products = dto.products ?? [];
+    const last =
+      products.length > 0
+        ? { date: dto.date, products, supplies: dto.supplies ?? [] }
+        : null;
+    if (last) await this.assertPacking(batch, last);
+    else if (batch.packings.length === 0)
+      throw new BadRequestException('Enter what was made');
+    else if ((dto.supplies ?? []).length > 0)
+      throw new BadRequestException('Enter the packs made with the supplies');
     const date = parseDate(dto.date);
     assertNotFuture(date);
     this.assertAfterStages(batch, date);
-    await this.assertMaterials(dto.supplies);
-    const found = await this.prisma.product.count({
-      where: { id: { in: dto.products.map((p) => p.productId) } },
-    });
-    if (found !== dto.products.length)
-      throw new BadRequestException('Unknown product in the list');
+    this.assertAfterPackings(batch, date);
 
     await this.prisma.$transaction(async (tx) => {
-      for (const p of dto.products)
-        await applyProductMovement(tx, {
-          productId: p.productId,
-          date,
-          type: ProductMovementType.PRODUCED,
-          quantity: p.stockQty,
-          note: `Batch ${batch.number}`,
-          batchId: id,
-        });
-      await this.useMaterials(tx, id, batch.number, date, dto.supplies, true);
+      if (last) await this.addPacking(tx, batch, last);
       await tx.batch.update({
         where: { id },
         data: {
@@ -383,20 +427,14 @@ export class BatchesService {
     return this.get(id);
   }
 
-  /** Undoes finishing: the products and supplies are taken back out, and the batch is open again. */
+  /** Back in process (to correct or add packings); what was packed stays in stock. */
   async reopen(id: number) {
     const batch = await this.batchOrThrow(id);
     if (batch.status !== BatchStatus.FINISHED)
       throw new BadRequestException('Only a finished batch can be reopened');
-    await this.prisma.$transaction(async (tx) => {
-      for (const m of batch.productMovements)
-        await reverseProductMovement(tx, m);
-      for (const m of batch.materialMovements.filter((x) => x.batchAtFinish))
-        await reverseMovement(tx, m);
-      await tx.batch.update({
-        where: { id },
-        data: { status: BatchStatus.OPEN, endDate: null },
-      });
+    await this.prisma.batch.update({
+      where: { id },
+      data: { status: BatchStatus.OPEN, endDate: null },
     });
     return this.get(id);
   }
@@ -407,6 +445,10 @@ export class BatchesService {
     assertNotFuture(date);
     if (date < batch.startDate)
       throw new BadRequestException('The date is before the batch started');
+    if (batch.packings.length > 0)
+      throw new BadRequestException(
+        'Packs were already made from this batch: finish it instead, or remove its packings first',
+      );
     await this.prisma.$transaction(async (tx) => {
       if (!dto.materialsLost)
         for (const m of batch.materialMovements) await reverseMovement(tx, m);
@@ -433,7 +475,12 @@ export class BatchesService {
   private async batchOrThrow(id: number) {
     const batch = await this.prisma.batch.findUnique({
       where: { id },
-      include: { stageDates: true, materialMovements: true, productMovements: true },
+      include: {
+        stageDates: true,
+        packings: true,
+        materialMovements: true,
+        productMovements: true,
+      },
     });
     if (!batch) throw new NotFoundException('Batch not found');
     return batch;
@@ -464,6 +511,55 @@ export class BatchesService {
       );
   }
 
+  private assertAfterPackings(batch: { packings: { date: Date }[] }, date: Date) {
+    const last = batch.packings.reduce(
+      (max, p) => (p.date > max ? p.date : max),
+      new Date(0),
+    );
+    if (date < last)
+      throw new BadRequestException(
+        `The date can't be before the last packing (${formatDate(last)})`,
+      );
+  }
+
+  private async assertPacking(
+    batch: { startDate: Date },
+    dto: { date: string; products: { productId: number }[]; supplies: BatchMaterialDto[] },
+  ) {
+    const date = parseDate(dto.date);
+    assertNotFuture(date);
+    if (date < batch.startDate)
+      throw new BadRequestException('The date is before the batch started');
+    await this.assertMaterials(dto.supplies);
+    const found = await this.prisma.product.count({
+      where: { id: { in: dto.products.map((p) => p.productId) } },
+    });
+    if (found !== dto.products.length)
+      throw new BadRequestException('Unknown product in the list');
+  }
+
+  private async addPacking(
+    tx: Tx,
+    batch: { id: number; number: string },
+    dto: PackBatchDto,
+  ) {
+    const date = parseDate(dto.date);
+    const packing = await tx.batchPacking.create({
+      data: { batchId: batch.id, date },
+    });
+    for (const p of dto.products)
+      await applyProductMovement(tx, {
+        productId: p.productId,
+        date,
+        type: ProductMovementType.PRODUCED,
+        quantity: p.stockQty,
+        note: `Batch ${batch.number}`,
+        batchId: batch.id,
+        batchPackingId: packing.id,
+      });
+    await this.useMaterials(tx, batch.id, batch.number, date, dto.supplies, packing.id);
+  }
+
   private async assertMaterials(materials: BatchMaterialDto[]) {
     if (materials.length === 0) return;
     const found = await this.prisma.material.count({
@@ -479,7 +575,7 @@ export class BatchesService {
     number: string,
     date: Date,
     materials: BatchMaterialDto[],
-    atFinish: boolean,
+    packingId?: number,
   ) {
     for (const m of materials)
       await applyMovement(tx, {
@@ -489,7 +585,7 @@ export class BatchesService {
         quantity: -m.quantity,
         note: `Batch ${number}`,
         batchId,
-        batchAtFinish: atFinish,
+        batchPackingId: packingId,
       });
   }
 
@@ -515,15 +611,11 @@ export class BatchesService {
       else costIncomplete = true;
     }
 
-    const finished = b.status === BatchStatus.FINISHED;
-    const wastage = finished
-      ? batchShares(
-          b.productMovements.map((m) => ({
-            product: m.product,
-            quantity: m.quantity,
-          })),
-          used,
-        ).map((w) => {
+    // Worked out once something was packed (so far, while the batch is in process).
+    const made = addUpProducts(b.productMovements);
+    const wastage =
+      made.length > 0
+      ? batchShares(made, used).map((w) => {
           const material = materialById.get(w.materialId)!;
           const waste = w.expected ? w.used.sub(w.expected) : null;
           return {
@@ -562,20 +654,36 @@ export class BatchesService {
       endDate: b.endDate && formatDate(b.endDate),
       materialsLost: b.materialsLost,
       notes: b.notes,
-      /** Raw materials put in at the start (`atFinish` false) and supplies used when finishing */
+      /** Raw materials put in at the start (`packingId` null) and supplies used for each packing */
       materials: b.materialMovements.map((m) => ({
         materialId: m.materialId,
         name: m.material.name,
         type: m.material.type as MaterialType,
         unit: m.material.unit,
         quantity: m.quantity.neg().toString(),
-        atFinish: m.batchAtFinish,
+        packingId: m.batchPackingId,
       })),
-      /** Made: `quantity` in sale units, `stockQty` in stock units */
-      products: b.productMovements.map((m) => ({
-        productId: m.productId,
+      /** Made in all: `quantity` in sale units, `stockQty` in stock units */
+      products: made.map((m) => ({
+        productId: m.product.id,
         quantity: toSaleUnits(m.product, m.quantity).toString(),
         stockQty: m.quantity.toString(),
+      })),
+      /** Each packing: the day, the packs made and the supplies used */
+      packings: b.packings.map((p) => ({
+        id: p.id,
+        date: formatDate(p.date),
+        products: b.productMovements
+          .filter((m) => m.batchPackingId === p.id)
+          .map((m) => ({ productId: m.productId, stockQty: m.quantity.toString() })),
+        supplies: b.materialMovements
+          .filter((m) => m.batchPackingId === p.id)
+          .map((m) => ({
+            materialId: m.materialId,
+            name: m.material.name,
+            unit: m.material.unit,
+            quantity: m.quantity.neg().toString(),
+          })),
       })),
       wastage,
       /** ₹ at the materials' latest prices; `incomplete` when one has no price */

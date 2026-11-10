@@ -47,7 +47,7 @@ export async function applyMovement(
     productId?: number;
     expectedQty?: Prisma.Decimal | null;
     batchId?: number;
-    batchAtFinish?: boolean;
+    batchPackingId?: number;
   },
 ) {
   const movement = await tx.stockMovement.create({ data });
@@ -115,13 +115,10 @@ export class StockService {
       }),
       this.prisma.productionEntry.findUnique({ where: { date: today } }),
       this.prisma.productionEntry.findFirst({ orderBy: { date: 'desc' } }),
-      // Finishing a batch is production too.
-      this.prisma.batch.findFirst({
-        where: { status: 'FINISHED' },
-        orderBy: { endDate: 'desc' },
-      }),
+      // Packing from a batch is production too.
+      this.prisma.batchPacking.findFirst({ orderBy: { date: 'desc' } }),
     ]);
-    const lastOn = [lastEntry?.date, lastBatch?.endDate ?? undefined]
+    const lastOn = [lastEntry?.date, lastBatch?.date]
       .filter((d): d is Date => d !== undefined)
       .sort((a, b) => b.getTime() - a.getTime())[0];
     const attention = materials
@@ -139,7 +136,7 @@ export class StockService {
       lowStock: attention.filter((m) => m.status === 'LOW'),
       negativeStock: attention.filter((m) => m.status === 'NEGATIVE'),
       dayEndDoneToday:
-        todayEntry !== null || lastBatch?.endDate?.getTime() === today.getTime(),
+        todayEntry !== null || lastBatch?.date.getTime() === today.getTime(),
       lastDayEndOn: lastOn ? formatDate(lastOn) : null,
     };
   }

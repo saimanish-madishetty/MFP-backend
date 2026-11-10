@@ -135,7 +135,8 @@ export class BatchOutputDto {
   stockQty: number;
 }
 
-export class FinishBatchDto {
+/** Packs made from a batch on a day, and the packing supplies used. The batch stays in process. */
+export class PackBatchDto {
   @IsDateOnly()
   date: string;
 
@@ -148,9 +149,28 @@ export class FinishBatchDto {
   @Type(() => BatchOutputDto)
   products: BatchOutputDto[];
 
-  /** Packing supplies (and anything else) used when finishing */
+  /** Packing supplies (and anything else) used */
   @MaterialList()
   supplies: BatchMaterialDto[];
+}
+
+/** Closes the batch, with a last packing if `products` are given. */
+export class FinishBatchDto {
+  @IsDateOnly()
+  date: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique((p: BatchOutputDto) => p.productId, {
+    message: 'Each product can appear only once',
+  })
+  @ValidateNested({ each: true })
+  @Type(() => BatchOutputDto)
+  products?: BatchOutputDto[];
+
+  @IsOptional()
+  @MaterialList()
+  supplies?: BatchMaterialDto[];
 
   @IsOptional()
   @IsString()

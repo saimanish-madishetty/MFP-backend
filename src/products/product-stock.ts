@@ -17,6 +17,7 @@ export async function applyProductMovement(
     productionEntryId?: number;
     saleId?: number;
     batchId?: number;
+    batchPackingId?: number;
   },
 ) {
   const movement = await tx.productStockMovement.create({ data });

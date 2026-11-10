@@ -143,6 +143,29 @@ export class ProductionService {
   }
 
   async forDate(dateStr: string) {
+    // Packs made from batches that day (entered on the batch, shown here too).
+    const packings = await this.prisma.batchPacking.findMany({
+      where: { date: parseDate(dateStr) },
+      orderBy: { id: 'asc' },
+      include: {
+        batch: { select: { id: true, number: true, plan: { select: { name: true } } } },
+        productMovements: { orderBy: { id: 'asc' } },
+        materialMovements: { orderBy: { id: 'asc' } },
+      },
+    });
+    const batches = packings.map((p) => ({
+      batchId: p.batch.id,
+      number: p.batch.number,
+      plan: p.batch.plan.name,
+      products: p.productMovements.map((m) => ({
+        productId: m.productId,
+        stockQty: m.quantity.toString(),
+      })),
+      supplies: p.materialMovements.map((m) => ({
+        materialId: m.materialId,
+        quantity: m.quantity.neg().toString(),
+      })),
+    }));
     const entry = await this.prisma.productionEntry.findUnique({
       where: { date: parseDate(dateStr) },
       include: {
@@ -157,11 +180,12 @@ export class ProductionService {
         },
       },
     });
-    if (!entry) return { date: dateStr, entry: null };
+    if (!entry) return { date: dateStr, batches, entry: null };
     // Usage is stored as negative movements; the API speaks in positive "used" quantities.
     const used = (m: { quantity: Prisma.Decimal }) => m.quantity.neg();
     return {
       date: dateStr,
+      batches,
       entry: {
         id: entry.id,
         notes: entry.notes,

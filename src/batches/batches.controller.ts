@@ -18,6 +18,7 @@ import {
   CancelBatchDto,
   CreateBatchPlanDto,
   FinishBatchDto,
+  PackBatchDto,
   StartBatchDto,
   UpdateBatchDto,
   UpdateBatchPlanDto,
@@ -87,6 +88,20 @@ export class BatchesController {
   @Post(':id/undo-stage')
   undoStage(@Param('id', ParseIntPipe) id: number) {
     return this.batches.undoStage(id);
+  }
+
+  /** Packs made on a day; the batch stays in process. */
+  @Post(':id/packings')
+  pack(@Param('id', ParseIntPipe) id: number, @Body() dto: PackBatchDto) {
+    return this.batches.pack(id, dto);
+  }
+
+  @Delete(':id/packings/:packingId')
+  removePacking(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('packingId', ParseIntPipe) packingId: number,
+  ) {
+    return this.batches.removePacking(id, packingId);
   }
 
   @Post(':id/finish')
