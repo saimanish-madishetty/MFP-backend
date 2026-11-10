@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module.js';
+import { BatchesModule } from './batches/batches.module.js';
 import { BuyersModule } from './buyers/buyers.module.js';
 import { ExpensesModule } from './expenses/expenses.module.js';
 import { HealthController } from './health/health.controller.js';
@@ -20,6 +21,7 @@ import { WorkersModule } from './workers/workers.module.js';
     AuthModule,
     WorkersModule,
     StockModule,
+    BatchesModule,
     ProductsModule,
     BuyersModule,
     SalesModule,

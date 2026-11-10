@@ -46,6 +46,8 @@ export async function applyMovement(
     productionEntryId?: number;
     productId?: number;
     expectedQty?: Prisma.Decimal | null;
+    batchId?: number;
+    batchAtFinish?: boolean;
   },
 ) {
   const movement = await tx.stockMovement.create({ data });
@@ -106,14 +108,22 @@ export class StockService {
 
   async overview() {
     const today = todayIST();
-    const [materials, todayEntry, lastEntry] = await Promise.all([
+    const [materials, todayEntry, lastEntry, lastBatch] = await Promise.all([
       this.prisma.material.findMany({
         where: { active: true },
         orderBy: { name: 'asc' },
       }),
       this.prisma.productionEntry.findUnique({ where: { date: today } }),
       this.prisma.productionEntry.findFirst({ orderBy: { date: 'desc' } }),
+      // Finishing a batch is production too.
+      this.prisma.batch.findFirst({
+        where: { status: 'FINISHED' },
+        orderBy: { endDate: 'desc' },
+      }),
     ]);
+    const lastOn = [lastEntry?.date, lastBatch?.endDate ?? undefined]
+      .filter((d): d is Date => d !== undefined)
+      .sort((a, b) => b.getTime() - a.getTime())[0];
     const attention = materials
       .map((m) => ({
         id: m.id,
@@ -128,8 +138,9 @@ export class StockService {
       materials: materials.length,
       lowStock: attention.filter((m) => m.status === 'LOW'),
       negativeStock: attention.filter((m) => m.status === 'NEGATIVE'),
-      dayEndDoneToday: todayEntry !== null,
-      lastDayEndOn: lastEntry ? formatDate(lastEntry.date) : null,
+      dayEndDoneToday:
+        todayEntry !== null || lastBatch?.endDate?.getTime() === today.getTime(),
+      lastDayEndOn: lastOn ? formatDate(lastOn) : null,
     };
   }
 

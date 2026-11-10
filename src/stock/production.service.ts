@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import {
+  BatchStatus,
   MaterialType,
   Prisma,
   ProductMovementType,
@@ -12,35 +13,15 @@ import {
   reverseProductMovement,
 } from '../products/product-stock.js';
 import { toSaleUnits, toStock } from '../products/packaging.js';
+import {
+  batchShares,
+  expectedUse,
+  recipeInclude,
+} from '../products/recipe.js';
 import { SaveProductionDto } from './dto/movement.dto.js';
 import { applyMovement, reverseMovement } from './stock.service.js';
 
 const Decimal = Prisma.Decimal;
-
-const recipeInclude = {
-  materials: true,
-} satisfies Prisma.ProductInclude;
-
-type ProductWithRecipe = Prisma.ProductGetPayload<{
-  include: typeof recipeInclude;
-}>;
-
-/**
- * How much of a material the recipe says `made` (in sale units) should take, or null when the
- * material isn't in the recipe or its quantity isn't filled in.
- */
-function expectedUse(
-  product: ProductWithRecipe,
-  materialId: number,
-  made: Prisma.Decimal | number,
-): Prisma.Decimal | null {
-  const line = product.materials.find((m) => m.materialId === materialId);
-  if (!line?.qtyPerUnit) return null;
-  const perUnit = line.perPiece
-    ? line.qtyPerUnit.mul(product.piecesPerUnit ?? 1)
-    : line.qtyPerUnit;
-  return perUnit.mul(made).toDecimalPlaces(3);
-}
 
 /**
  * Wastage = used − expected (negative means less was used than the recipe says). With `cost` (the
@@ -123,6 +104,44 @@ function monthRange(month: string) {
 export class ProductionService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Finished batches matching `where`: each material used, shared out between the products made
+   * by what their recipes expect (see batchShares). Dated the day the batch was finished.
+   */
+  private async batchLines(where: Prisma.BatchWhereInput) {
+    const batches = await this.prisma.batch.findMany({
+      where: { ...where, status: BatchStatus.FINISHED },
+      include: {
+        materialMovements: true,
+        productMovements: { include: { product: { include: recipeInclude } } },
+      },
+    });
+    return batches.flatMap((b) => {
+      const used = new Map<number, Prisma.Decimal>();
+      for (const m of b.materialMovements)
+        used.set(
+          m.materialId,
+          (used.get(m.materialId) ?? new Decimal(0)).add(m.quantity.neg()),
+        );
+      return batchShares(
+        b.productMovements.map((m) => ({
+          product: m.product,
+          quantity: m.quantity,
+        })),
+        used,
+      ).flatMap((w) =>
+        w.shares.map((x) => ({
+          date: formatDate(b.endDate!),
+          batch: b.number,
+          productId: x.productId,
+          materialId: w.materialId,
+          used: x.used,
+          expected: x.expected,
+        })),
+      );
+    });
+  }
+
   async forDate(dateStr: string) {
     const entry = await this.prisma.productionEntry.findUnique({
       where: { date: parseDate(dateStr) },
@@ -190,7 +209,7 @@ export class ProductionService {
 
   /** Raw materials used for a product vs. its recipe, per production day (latest first), with totals. */
   async wastage(productId: number, limit = 60) {
-    const [usage, made] = await Promise.all([
+    const [direct, made, fromBatches, materials] = await Promise.all([
       this.prisma.stockMovement.findMany({
         where: { productId, type: StockMovementType.USAGE },
         orderBy: [{ date: 'desc' }, { id: 'asc' }],
@@ -200,8 +219,36 @@ export class ProductionService {
         where: { productId, type: ProductMovementType.PRODUCED },
         include: { product: true },
       }),
+      this.batchLines({ productMovements: { some: { productId } } }),
+      this.prisma.material.findMany(wasteMaterial),
     ]);
-    const madeOn = new Map(made.map((m) => [formatDate(m.date), m]));
+    const materialById = new Map(materials.map((m) => [m.id, m]));
+    // Batches: this product's share of each material.
+    const usage = [
+      ...direct,
+      ...fromBatches
+        .filter((l) => l.productId === productId)
+        .map((l) => ({
+          date: parseDate(l.date),
+          materialId: l.materialId,
+          quantity: l.used.neg(),
+          expectedQty: l.expected,
+          material: materialById.get(l.materialId)!,
+        })),
+    ];
+    // A day can have several entries (the day-end entry and finished batches): added up.
+    const madeOn = new Map<
+      string,
+      { product: (typeof made)[number]['product']; quantity: Prisma.Decimal }
+    >();
+    for (const m of made) {
+      const key = formatDate(m.date);
+      const prev = madeOn.get(key);
+      madeOn.set(key, {
+        product: m.product,
+        quantity: prev ? prev.quantity.add(m.quantity) : m.quantity,
+      });
+    }
     // Every production day, also those with no materials entered for the product.
     const dates = [
       ...new Set([...usage, ...made].map((m) => formatDate(m.date))),
@@ -285,7 +332,7 @@ export class ProductionService {
   async wastageLines(month?: string) {
     const date = month ? monthRange(month) : undefined;
     const dateWhere = date ? { gte: date.from, lt: date.to } : undefined;
-    const [usage, made, materials] = await Promise.all([
+    const [usage, made, materials, fromBatches] = await Promise.all([
       this.prisma.stockMovement.findMany({
         where: { type: StockMovementType.USAGE, date: dateWhere },
         orderBy: [{ date: 'asc' }, { id: 'asc' }],
@@ -295,6 +342,7 @@ export class ProductionService {
           materialId: true,
           quantity: true,
           expectedQty: true,
+          batchId: true,
         },
       }),
       this.prisma.productStockMovement.findMany({
@@ -311,6 +359,7 @@ export class ProductionService {
           lastCostPerUnit: true,
         },
       }),
+      this.batchLines(dateWhere ? { endDate: dateWhere } : {}),
     ]);
     const typeOf = new Map(materials.map((m) => [m.id, m.type]));
     const isSupply = (id: number) => typeOf.get(id) === MaterialType.SUPPLY;
@@ -324,6 +373,8 @@ export class ProductionService {
       expected: string | null;
       /** A supply: the day's use shared out between the products made */
       shared?: true;
+      /** From this batch: its use shared out between the products made */
+      batch?: string;
     };
     const lines: Line[] = [];
 
@@ -345,7 +396,8 @@ export class ProductionService {
     // (and not given their own line) should have taken.
     const supplyUsed = new Map<string, Prisma.Decimal>(); // "date|materialId"
     for (const u of usage) {
-      if (!isSupply(u.materialId) || u.productId !== null) continue;
+      if (!isSupply(u.materialId) || u.productId !== null || u.batchId !== null)
+        continue;
       const key = `${formatDate(u.date)}|${u.materialId}`;
       supplyUsed.set(
         key,
@@ -357,6 +409,7 @@ export class ProductionService {
       { productId: number; expected: Prisma.Decimal }[]
     >();
     for (const pm of made) {
+      if (pm.batchId !== null) continue; // compared within its batch, below
       const units = toSaleUnits(pm.product, pm.quantity);
       for (const r of pm.product.materials) {
         if (!isSupply(r.materialId)) continue;
@@ -387,6 +440,16 @@ export class ProductionService {
           shared: true,
         });
     }
+    for (const l of fromBatches)
+      lines.push({
+        date: l.date,
+        productId: l.productId,
+        materialId: l.materialId,
+        used: l.used.toString(),
+        expected: l.expected.toString(),
+        shared: true,
+        batch: l.batch,
+      });
     lines.sort((a, b) => a.date.localeCompare(b.date));
 
     const usedIds = new Set(lines.map((l) => l.materialId));

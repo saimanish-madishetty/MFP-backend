@@ -218,14 +218,20 @@ model StockMovement {
   productId         Int?
   /// USAGE for a product: what the recipe says it should have taken (snapshot), for wastage = used − expected
   expectedQty       Decimal?          @db.Decimal(12, 3)
+  /// USAGE for a batch: materials put in at the start, or supplies used when it was finished
+  batchId           Int?
+  /// true: used when the batch was finished (packing supplies); false: put in at the start
+  batchAtFinish     Boolean           @default(false)
   createdAt         DateTime          @default(now())
 
   material        Material         @relation(fields: [materialId], references: [id])
   productionEntry ProductionEntry? @relation(fields: [productionEntryId], references: [id], onDelete: Cascade)
   product         Product?         @relation(fields: [productId], references: [id])
+  batch           Batch?           @relation(fields: [batchId], references: [id])
 
   @@index([materialId, date])
   @@index([productId, date])
+  @@index([batchId])
 }
 
 /// Day-end entry: materials used (and, from module 3, products made)
@@ -287,10 +293,13 @@ model Product {
   groupId       Int?
   /// The size's value for each of the group's dimensions, same order, e.g. ["1.5mm", "500g"]
   options       String[] @default([])
+  /// The batch plan (stages) this product is made with; null = made in one day (day-end entry)
+  batchPlanId   Int?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   group         ProductGroup? @relation(fields: [groupId], references: [id])
+  batchPlan     BatchPlan?    @relation(fields: [batchPlanId], references: [id], onDelete: SetNull)
   materials     ProductMaterial[]
   movements     ProductStockMovement[]
   saleLines     SaleLine[]
@@ -348,13 +357,85 @@ model ProductStockMovement {
   note              String?
   productionEntryId Int?
   saleId            Int?
+  /// PRODUCED by finishing a batch
+  batchId           Int?
   createdAt         DateTime            @default(now())
 
   product         Product          @relation(fields: [productId], references: [id])
   productionEntry ProductionEntry? @relation(fields: [productionEntryId], references: [id], onDelete: Cascade)
   sale            Sale?            @relation(fields: [saleId], references: [id])
+  batch           Batch?           @relation(fields: [batchId], references: [id])
 
   @@index([productId, date])
+  @@index([batchId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Batches: production that takes more than a day (mixer → … → packed)
+// ─────────────────────────────────────────────────────────────
+
+/** How a kind of product is made: its stages in order, e.g. Mixer, Strands, Boiled, Folded, Dried, Packed. */
+model BatchPlan {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  stages    String[] @default([])
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+  batches  Batch[]
+}
+
+enum BatchStatus {
+  OPEN
+  FINISHED
+  CANCELLED
+}
+
+/**
+ * One lot from the mixer to the packet. Raw materials come out of stock when it starts; finishing
+ * it adds the products made (packs chosen then) and takes the packing supplies. Wastage is worked
+ * out per batch, whatever the dates.
+ */
+model Batch {
+  id            Int         @id @default(autoincrement())
+  /// "B-101126-1": start date (DDMMYY) and the day's count
+  number        String      @unique
+  planId        Int
+  /// The plan's stages when the batch started (the plan can change later)
+  stages        String[]    @default([])
+  /// Index into `stages` of the stage reached
+  stage         Int         @default(0)
+  status        BatchStatus @default(OPEN)
+  startDate     DateTime    @db.Date
+  /// Finished or cancelled on
+  endDate       DateTime?   @db.Date
+  /// CANCELLED: true = materials lost (stay used), false = put back in stock
+  materialsLost Boolean?
+  notes         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  plan              BatchPlan              @relation(fields: [planId], references: [id])
+  stageDates        BatchStage[]
+  materialMovements StockMovement[]
+  productMovements  ProductStockMovement[]
+
+  @@index([status])
+  @@index([startDate])
+}
+
+/** The date a batch reached a stage. */
+model BatchStage {
+  id      Int      @id @default(autoincrement())
+  batchId Int
+  stage   Int
+  date    DateTime @db.Date
+
+  batch Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, stage])
 }
 
 // ─────────────────────────────────────────────────────────────
