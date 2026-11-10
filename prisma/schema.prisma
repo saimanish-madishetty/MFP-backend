@@ -407,6 +407,8 @@ model Batch {
   planId        Int
   /// The plan's stages when the batch started (the plan can change later)
   stages        String[]    @default([])
+  /// The sizes (products) to be made, chosen at the start; can be added to until it is finished
+  productIds    Int[]       @default([])
   /// Index into `stages` of the stage reached
   stage         Int         @default(0)
   status        BatchStatus @default(OPEN)

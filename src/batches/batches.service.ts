@@ -240,6 +240,7 @@ export class BatchesService {
       plan: b.plan,
       stages: b.stages,
       stage: b.stage,
+      productIds: b.productIds,
       startDate: formatDate(b.startDate),
       endDate: b.endDate && formatDate(b.endDate),
       /** When the current stage was reached */
@@ -278,6 +279,7 @@ export class BatchesService {
     const date = parseDate(dto.date);
     assertNotFuture(date);
     await this.assertMaterials(dto.materials);
+    await this.assertProducts(dto.productIds ?? []);
 
     const id = await this.prisma.$transaction(async (tx) => {
       const prefix = numberPrefix(date);
@@ -290,6 +292,7 @@ export class BatchesService {
           number,
           planId: plan.id,
           stages: plan.stages,
+          productIds: dto.productIds ?? [],
           startDate: date,
           notes: dto.notes?.trim() || null,
           stageDates: { create: { stage: 0, date } },
@@ -315,12 +318,14 @@ export class BatchesService {
         'The start date must be on or before the later stages and packings',
       );
     if (dto.materials) await this.assertMaterials(dto.materials);
+    if (dto.productIds) await this.assertProducts(dto.productIds);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.batch.update({
         where: { id },
         data: {
           startDate: date,
+          productIds: dto.productIds,
           ...(dto.notes !== undefined && { notes: dto.notes.trim() || null }),
         },
       });
@@ -562,6 +567,18 @@ export class BatchesService {
     const packing = await tx.batchPacking.create({
       data: { batchId: batch.id, date },
     });
+    const sizes = await tx.batch.findUniqueOrThrow({
+      where: { id: batch.id },
+      select: { productIds: true },
+    });
+    const added = dto.products
+      .map((p) => p.productId)
+      .filter((pid) => !sizes.productIds.includes(pid));
+    if (added.length > 0)
+      await tx.batch.update({
+        where: { id: batch.id },
+        data: { productIds: [...sizes.productIds, ...added] },
+      });
     for (const p of dto.products)
       await applyProductMovement(tx, {
         productId: p.productId,
@@ -573,6 +590,15 @@ export class BatchesService {
         batchPackingId: packing.id,
       });
     await this.useMaterials(tx, batch.id, batch.number, date, dto.supplies, packing.id);
+  }
+
+  private async assertProducts(productIds: number[]) {
+    if (productIds.length === 0) return;
+    const found = await this.prisma.product.count({
+      where: { id: { in: productIds } },
+    });
+    if (found !== productIds.length)
+      throw new BadRequestException('Unknown product in the list');
   }
 
   private async assertMaterials(materials: BatchMaterialDto[]) {
@@ -660,6 +686,8 @@ export class BatchesService {
       number: b.number,
       status: b.status,
       plan: b.plan,
+      /** The sizes to be made */
+      productIds: b.productIds,
       stage: b.stage,
       stages: b.stages.map((name, i) => ({
         name,

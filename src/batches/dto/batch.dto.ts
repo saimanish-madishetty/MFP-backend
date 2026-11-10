@@ -98,6 +98,13 @@ export class StartBatchDto {
   @MaterialList()
   materials: BatchMaterialDto[];
 
+  /** The sizes (products) to be made */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsInt({ each: true })
+  productIds?: number[];
+
   @IsOptional()
   @IsString()
   @MaxLength(1000)
@@ -113,6 +120,13 @@ export class UpdateBatchDto {
   @ArrayMinSize(1, { message: 'Add the raw materials used' })
   @MaterialList()
   materials?: BatchMaterialDto[];
+
+  /** The sizes (products) to be made */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsInt({ each: true })
+  productIds?: number[];
 
   @IsOptional()
   @IsString()
